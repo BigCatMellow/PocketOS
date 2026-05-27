@@ -6,21 +6,53 @@ A minimal launcher for the Miyoo Mini Plus built on top of Onion OS. Replaces th
 
 ## Screenshots
 
+**Boot Screen** — clean minimal boot logo on startup
+
 <p align="center">
-  <img src="screenshots/03 - Home Screen.png" width="320" alt="Home Screen">
-  <img src="screenshots/05 - Library.png" width="320" alt="Library">
+  <img src="screenshots/01 - bootscreen.png" width="480" alt="Boot Screen">
 </p>
+
+**Splash** — brief splash screen before the menu loads
+
 <p align="center">
-  <img src="screenshots/06 - Browse.png" width="320" alt="Browse by Genre">
-  <img src="screenshots/07 - Apps.png" width="320" alt="Apps">
+  <img src="screenshots/02 - splash.png" width="480" alt="Splash Screen">
 </p>
+
+**Home Screen** — vertical list navigation with quick access to every section
+
 <p align="center">
-  <img src="screenshots/08 - Settings.png" width="320" alt="Settings">
-  <img src="screenshots/04 - Favorites.png" width="320" alt="Favorites">
+  <img src="screenshots/03 - Home Screen.png" width="480" alt="Home Screen">
 </p>
+
+**Favorites** — your pinned games in one place
+
 <p align="center">
-  <img src="screenshots/01 - bootscreen.png" width="320" alt="Boot Screen">
-  <img src="screenshots/02 - splash.png" width="320" alt="Splash">
+  <img src="screenshots/04 - Favorites.png" width="480" alt="Favorites">
+</p>
+
+**Library** — full game library organized by system, with full system names in the left panel
+
+<p align="center">
+  <img src="screenshots/05 - Library.png" width="480" alt="Library">
+</p>
+
+**Browse by Genre** — filter your entire library by genre across all systems (requires Genre Scanner)
+
+<p align="center">
+  <img src="screenshots/06 - Browse.png" width="480" alt="Browse by Genre">
+</p>
+
+**Apps** — all your installed Onion apps in one launcher
+
+<p align="center">
+  <img src="screenshots/07 - Apps.png" width="480" alt="Apps">
+</p>
+
+**Settings** — brightness, volume, theme, font, Wi-Fi, sleep timer, and more
+
+<p align="center">
+  <img src="screenshots/08 - Settings.png" width="480" alt="Settings">
+  <img src="screenshots/09 - Settings 2.png" width="480" alt="Settings 2">
 </p>
 
 ---
