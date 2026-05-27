@@ -1,0 +1,209 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  # ── Build ARM binary ────────────────────────────────────────────────────────
+  build-arm:
+    name: Build ARM binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build pocketOS (ARM Cortex-A7)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/src/pocketOS:/work" \
+            aemiii91/miyoomini-toolchain:latest \
+            sh -c "cd /work && make clean && make"
+
+      - name: Upload ARM binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketOS-arm
+          path: src/pocketOS/pocketOS
+
+  # ── Build SD card zip ───────────────────────────────────────────────────────
+  build-zip:
+    name: Build SD card zip
+    runs-on: ubuntu-latest
+    needs: build-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download ARM binary
+        uses: actions/download-artifact@v4
+        with:
+          name: pocketOS-arm
+          path: dist/bin/
+
+      - name: Assemble zip
+        run: |
+          chmod +x dist/bin/pocketOS
+          mkdir -p staging/.tmp_update/bin
+          mkdir -p staging/.tmp_update/res
+          cp dist/bin/pocketOS staging/.tmp_update/bin/pocketOS
+          cp -r assets/res/pocketos staging/.tmp_update/res/pocketos
+          cp README.md staging/README.md
+          cd staging
+          zip -r "../pocketOS-${{ github.ref_name }}.zip" .
+          cd ..
+
+      - name: Upload SD card zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketOS-sdcard-zip
+          path: pocketOS-${{ github.ref_name }}.zip
+
+  # ── Build installers (matrix) ───────────────────────────────────────────────
+  build-installers:
+    name: Build installers (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: build-arm
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+            sep: ':'
+            installer_out: PocketOS-Installer-linux
+            scanner_out:   PocketOS-GenreScanner-linux
+          - os: windows-latest
+            label: windows
+            sep: ';'
+            installer_out: PocketOS-Installer-windows.exe
+            scanner_out:   PocketOS-GenreScanner-windows.exe
+          - os: macos-latest
+            label: macos
+            sep: ':'
+            installer_out: PocketOS-Installer-macos
+            scanner_out:   PocketOS-GenreScanner-macos
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download ARM binary
+        uses: actions/download-artifact@v4
+        with:
+          name: pocketOS-arm
+          path: dist/bin/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pyinstaller pillow
+
+      - name: Prepare payload (Unix)
+        if: matrix.label != 'windows'
+        run: |
+          chmod +x dist/bin/pocketOS
+          mkdir -p release/pocketOS-${{ github.ref_name }}/.tmp_update/bin
+          mkdir -p release/pocketOS-${{ github.ref_name }}/.tmp_update/res
+          cp dist/bin/pocketOS release/pocketOS-${{ github.ref_name }}/.tmp_update/bin/pocketOS
+          cp -r assets/res/pocketos release/pocketOS-${{ github.ref_name }}/.tmp_update/res/pocketos
+
+      - name: Prepare payload (Windows)
+        if: matrix.label == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "release/pocketOS-${{ github.ref_name }}/.tmp_update/bin"
+          New-Item -ItemType Directory -Force -Path "release/pocketOS-${{ github.ref_name }}/.tmp_update/res"
+          Copy-Item "dist/bin/pocketOS" "release/pocketOS-${{ github.ref_name }}/.tmp_update/bin/pocketOS"
+          Copy-Item -Recurse "assets/res/pocketos" "release/pocketOS-${{ github.ref_name }}/.tmp_update/res/pocketos"
+
+      - name: Build installer
+        run: >
+          pyinstaller --onefile --windowed
+          --name ${{ matrix.installer_out }}
+          --add-data "release/pocketOS-${{ github.ref_name }}${{ matrix.sep }}release/pocketOS-${{ github.ref_name }}"
+          tools/installer.py
+
+      - name: Build genre scanner
+        run: >
+          pyinstaller --onefile --windowed
+          --name ${{ matrix.scanner_out }}
+          tools/genre_scanner.py
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.installer_out }}
+          path: dist/${{ matrix.installer_out }}
+
+      - name: Upload genre scanner
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.scanner_out }}
+          path: dist/${{ matrix.scanner_out }}
+
+  # ── Create GitHub Release ───────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-zip, build-installers]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release-assets
+          find artifacts/ -type f | while read f; do
+            cp "$f" release-assets/
+          done
+          ls -lh release-assets/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PocketOS ${{ github.ref_name }}
+          body: |
+            ## PocketOS ${{ github.ref_name }}
+
+            A minimal vertical-list launcher for the Miyoo Mini Plus, built on top of Onion OS.
+
+            ---
+
+            ### Quick Install (SD card zip)
+            1. Download `pocketOS-${{ github.ref_name }}.zip`
+            2. Extract to the **root of your Miyoo SD card**
+            3. Eject and boot — PocketOS launches automatically
+
+            ### GUI Installer
+            Download the installer for your platform and point it at your SD card root.
+
+            | Platform | Download |
+            |----------|---------|
+            | Linux    | `PocketOS-Installer-linux` |
+            | Windows  | `PocketOS-Installer-windows.exe` |
+            | macOS    | `PocketOS-Installer-macos` |
+
+            ### Genre Scanner
+            Scans your ROM folders against OpenVGDB and writes `miyoogamelist.xml` files for Browse by Genre.
+
+            | Platform | Download |
+            |----------|---------|
+            | Linux    | `PocketOS-GenreScanner-linux` |
+            | Windows  | `PocketOS-GenreScanner-windows.exe` |
+            | macOS    | `PocketOS-GenreScanner-macos` |
+
+            ---
+
+            ### Uninstall
+            Delete `.tmp_update/bin/pocketOS` from your SD card and reboot.
+          files: release-assets/*
+          draft: false
+          prerelease: false

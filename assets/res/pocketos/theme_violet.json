@@ -1,0 +1,18 @@
+{
+  "font":          "BPreplayBold.otf",
+  "bg":            "#151226",
+  "bar":           "#090518",
+  "sep":           "#26213D",
+  "sel":           "#23134C",
+  "sel_hi":        "#34216A",
+  "sel_border":    "#D15FEA",
+  "panel_hdr":     "#1A152F",
+  "panel_hi":      "#2E2356",
+  "divider":       "#3B2E6A",
+  "card":          "#1A152F",
+  "card_border":   "#282244",
+  "text":          "#D6D5E7",
+  "white":         "#EDECF8",
+  "dim":           "#686389",
+  "hdr":           "#E573FE"
+}
