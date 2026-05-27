@@ -1,6 +1,27 @@
-# PocketOS v1.0
+# PocketOS
 
-A minimal launcher skin built on top of Onion OS for the Miyoo Mini Plus. Replaces the default grid-based main menu with a clean vertical list interface, while keeping all of Onion's features intact underneath.
+A minimal launcher for the Miyoo Mini Plus built on top of Onion OS. Replaces the default grid menu with a clean vertical list interface — all of Onion's features stay intact underneath.
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="screenshots/03 - Home Screen.png" width="320" alt="Home Screen">
+  <img src="screenshots/05 - Library.png" width="320" alt="Library">
+</p>
+<p align="center">
+  <img src="screenshots/06 - Browse.png" width="320" alt="Browse by Genre">
+  <img src="screenshots/07 - Apps.png" width="320" alt="Apps">
+</p>
+<p align="center">
+  <img src="screenshots/08 - Settings.png" width="320" alt="Settings">
+  <img src="screenshots/04 - Favorites.png" width="320" alt="Favorites">
+</p>
+<p align="center">
+  <img src="screenshots/01 - bootscreen.png" width="320" alt="Boot Screen">
+  <img src="screenshots/02 - splash.png" width="320" alt="Splash">
+</p>
 
 ---
 
@@ -13,18 +34,26 @@ A minimal launcher skin built on top of Onion OS for the Miyoo Mini Plus. Replac
 
 ## Install
 
-1. Download `pocketOS-v1.0.zip`
-2. Extract it to the **root of your SD card** — the `.tmp_update` folder will merge with the existing one
+### Option A — GUI Installer (recommended)
+Download the installer for your platform from the [latest release](../../releases/latest), run it, point it at your SD card root, and click **Install PocketOS**.
+
+| Platform | Download |
+|----------|---------|
+| Linux    | `PocketOS-Installer-linux` |
+| Windows  | `PocketOS-Installer-windows.exe` |
+| macOS    | `PocketOS-Installer-macos` |
+
+### Option B — Manual (SD card zip)
+1. Download `pocketOS-vX.X.zip` from the [latest release](../../releases/latest)
+2. Extract it to the **root of your Miyoo SD card** — the `.tmp_update` folder will merge with the existing one
 3. Safely eject your SD card and insert it into your Miyoo Mini Plus
 4. Power on — PocketOS will launch automatically
-
-That's it. Onion OS detects the binary and uses it instead of the default main menu.
 
 ---
 
 ## Uninstall
 
-Delete `.tmp_update/bin/pocketOS` from your SD card and reboot. The default Onion OS menu will return.
+Use the **Uninstall** button in the GUI installer, or manually delete `.tmp_update/bin/pocketOS` from your SD card and reboot. The default Onion OS menu will return.
 
 ---
 
@@ -35,9 +64,21 @@ Delete `.tmp_update/bin/pocketOS` from your SD card and reboot. The default Onio
 - **Multiple fonts** — selectable from Settings → Font
 - **Full settings panel** — brightness, volume, Wi-Fi, blue light filter, sleep timer, and more
 - **Complete app launcher** — all your installed Onion apps in one place
-- **Browse by genre** — explore your library filtered by genre (requires `miyoogamelist.xml` files)
-- **Screenshots** — hold L1 + L2 + R1 + R2 to capture the UI, saved to `/Screenshots/`
+- **Browse by genre** — explore your library filtered by genre (use the Genre Scanner tool to generate `miyoogamelist.xml` files)
+- **Screenshots** — hold L1 + L2 + R1 + R2 to capture the screen, saved to `/Screenshots/`
 - **Device & About info panels** — firmware, Onion OS version, kernel info
+
+---
+
+## Genre Scanner
+
+The Genre Scanner tool scans your ROM folders against the OpenVGDB database and writes `miyoogamelist.xml` files so Browse by Genre works automatically.
+
+| Platform | Download |
+|----------|---------|
+| Linux    | `PocketOS-GenreScanner-linux` |
+| Windows  | `PocketOS-GenreScanner-windows.exe` |
+| macOS    | `PocketOS-GenreScanner-macos` |
 
 ---
 
