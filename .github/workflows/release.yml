@@ -19,7 +19,7 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/src/pocketOS:/work" \
             aemiii91/miyoomini-toolchain:latest \
-            sh -c "cd /work && make clean && make"
+            bash -l -c "cd /work && make clean && make"
 
       - name: Upload ARM binary
         uses: actions/upload-artifact@v4
