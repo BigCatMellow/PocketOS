@@ -367,12 +367,17 @@ static const char *HOME_ICONS[] = {
 #define HOME_COUNT 7
 
 static AppEntry APP_ENTRIES[] = {
+    { "Advanced Menu",   "tools.png",        "cd /mnt/SDCARD/App/AdvanceMENU; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Battery",         "app_battery.png",  "cd /mnt/SDCARD/App/BatteryMonitorUI; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
+    { "Boot Logo",       "icon_theme.png",   "cd /mnt/SDCARD/App/EasyLogoTweak; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Calibration",     "app_display.png",  "cd /mnt/SDCARD/App/240pSuite; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Clock",           "app_clock.png",    "cd /mnt/SDCARD/App/Clock; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
-    { "Internet Archive","downloads.png",    "/mnt/SDCARD/.tmp_update/bin/romdl" },
     { "Expert Mode",     "app_expert.png",   "cd /mnt/SDCARD/App/Expert_Mode; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
+    { "Filter",          "app_search.png",   "cd /mnt/SDCARD/App/Filter; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Game Switcher",   "app_switcher.png", "cd /mnt/SDCARD/App/StartGameSwitcher; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
+    { "Green Mode",      "icon_bluelight.png","cd /mnt/SDCARD/App/Green; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
+    { "Guest Mode",      "app_expert.png",   "cd /mnt/SDCARD/App/Guest_Mode; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
+    { "Internet Archive","downloads.png",    "/mnt/SDCARD/.tmp_update/bin/romdl" },
     { "Music",           "music.png",        "cd /mnt/SDCARD/App/Gmu; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Packages",        "app_packages.png", "cd /mnt/SDCARD/App/PackageManager; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Play Activity",   "app_activity.png", "cd /mnt/SDCARD/App/PlayActivity; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
@@ -380,6 +385,7 @@ static AppEntry APP_ENTRIES[] = {
     { "Random Game",     "app_random.png",   "cd /mnt/SDCARD/App/RandomGamePicker; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Reader",          "reader.png",       "cd /mnt/SDCARD/App/PixelReader; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "RetroArch",       "app_retroarch.png","cd /mnt/SDCARD/App/RetroArch; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
+    { "ROM Scripts",     "app_random.png",   "cd /mnt/SDCARD/App/romscripts; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Screenshots",     "screenshots.png",  "cd /mnt/SDCARD/App/Screenshots_Viewer; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Search",          "app_search.png",   "cd /mnt/SDCARD/App/Search; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Settings",        "settings.png",     "internal-settings" },
