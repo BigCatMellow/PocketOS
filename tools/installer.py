@@ -63,37 +63,54 @@ def install(sd: Path, log):
     bin_dest = sd / ".tmp_update" / "bin"
     res_dest = sd / ".tmp_update" / "res" / "pocketos"
 
-    log("Creating directories...")
+    log("► Setting up folders on your SD card...")
     bin_dest.mkdir(parents=True, exist_ok=True)
     res_dest.mkdir(parents=True, exist_ok=True)
 
-    log("Copying binary...")
+    log("► Copying the PocketOS launcher...")
     shutil.copy2(PAYLOAD_BIN, bin_dest / "pocketOS")
 
-    log("Copying assets...")
+    log("► Copying themes, icons, and fonts...")
     if res_dest.exists():
         shutil.rmtree(res_dest)
     shutil.copytree(PAYLOAD_RES, res_dest)
 
-    log(f"\nPocketOS {VERSION} installed successfully!")
-    log("Safely eject your SD card and insert it into your Miyoo Mini Plus.")
-    log("PocketOS will launch automatically on boot.")
+    log("")
+    log("✓ PocketOS installed successfully!")
+    log("")
+    log("What to do next:")
+    log("  1. Close this window")
+    log("  2. Safely eject your SD card")
+    log("  3. Insert it into your Miyoo Mini Plus and power on")
+    log("  4. PocketOS will launch automatically — no extra steps needed")
+    log("")
+    log("Your games, saves, and Onion settings are untouched.")
 
 
 def uninstall(sd: Path, log):
+    log("► Removing PocketOS launcher...")
     target = sd / ".tmp_update" / "bin" / "pocketOS"
     if target.exists():
         target.unlink()
-        log("Removed .tmp_update/bin/pocketOS")
+        log("  Removed launcher binary")
     else:
-        log("PocketOS binary not found — already uninstalled?")
+        log("  PocketOS binary not found — may already be uninstalled")
 
+    log("► Removing PocketOS themes and assets...")
     res = sd / ".tmp_update" / "res" / "pocketos"
     if res.exists():
         shutil.rmtree(res)
-        log("Removed .tmp_update/res/pocketos/")
+        log("  Removed themes, icons, and fonts")
 
-    log("\nPocketOS uninstalled. Onion OS default menu will return on next boot.")
+    log("")
+    log("✓ PocketOS removed.")
+    log("")
+    log("What to do next:")
+    log("  1. Safely eject your SD card")
+    log("  2. Insert it into your Miyoo Mini Plus and power on")
+    log("  3. The default Onion OS menu will return automatically")
+    log("")
+    log("Your games and saves are untouched.")
 
 
 # ── GUI ───────────────────────────────────────────────────────────────────────
@@ -124,8 +141,10 @@ class App(tk.Tk):
         ACC = "#89b4fa"
         BTN = "#45475a"
         RED = "#f38ba8"
+        SUB = "#a6adc8"
+        DIM = "#6c7086"
 
-        # Header — ASCII logo
+        # ── ASCII logo ────────────────────────────────────────────────────────
         LOGO = (
             r" ____             _        _    ___  ____  " + "\n"
             r"|  _ \ ___   ___ | | _____| |_ / _ \/ ___| " + "\n"
@@ -137,71 +156,112 @@ class App(tk.Tk):
         tk.Label(self, text=LOGO, font=("Courier", 9, "bold"),
                  fg=ACC, bg=BG, justify="center").pack(pady=(PAD, 4))
         tk.Label(self, text="A minimal launcher for the Miyoo Mini Plus  ·  Built on Onion OS",
-                 font=("Helvetica", 9), fg="#6c7086", bg=BG, justify="center").pack(pady=(0, PAD))
+                 font=("Helvetica", 9), fg=DIM, bg=BG, justify="center").pack(pady=(0, 8))
 
         ttk.Separator(self, orient="horizontal").pack(fill="x", padx=PAD)
 
-        # SD card picker
+        # ── How to use ────────────────────────────────────────────────────────
+        steps_frame = tk.Frame(self, bg="#181825", padx=PAD, pady=10)
+        steps_frame.pack(fill="x", padx=PAD, pady=(10, 0))
+
+        tk.Label(steps_frame, text="How to install", font=("Helvetica", 9, "bold"),
+                 fg=ACC, bg="#181825", anchor="w").pack(fill="x")
+
+        steps = [
+            ("1", "Insert your Miyoo Mini Plus SD card into your computer."),
+            ("2", "Select the SD card root folder below  (it contains Roms/, BIOS/, etc.)"),
+            ("3", "Click  Install PocketOS  and wait for it to finish."),
+            ("4", "Eject the SD card safely, insert it into your device, and power on."),
+            ("",  "PocketOS launches automatically — no extra steps needed on the device."),
+        ]
+        for num, text in steps:
+            row = tk.Frame(steps_frame, bg="#181825")
+            row.pack(fill="x", pady=1)
+            if num:
+                tk.Label(row, text=f" {num}. ", font=("Helvetica", 9, "bold"),
+                         fg=ACC, bg="#181825", width=3, anchor="e").pack(side="left")
+            else:
+                tk.Label(row, text="    ", bg="#181825").pack(side="left")
+            tk.Label(row, text=text, font=("Helvetica", 9),
+                     fg=SUB, bg="#181825", anchor="w", justify="left").pack(side="left")
+
+        ttk.Separator(self, orient="horizontal").pack(fill="x", padx=PAD, pady=(10, 0))
+
+        # ── SD card picker ────────────────────────────────────────────────────
         frame = tk.Frame(self, bg=BG, padx=PAD, pady=PAD)
         frame.pack(fill="x")
 
-        tk.Label(frame, text="SD Card  (select the root of your Miyoo SD card)",
+        tk.Label(frame, text="Step 1 — Select your SD card",
                  fg=FG, bg=BG, font=("Helvetica", 10, "bold"), anchor="w").pack(fill="x")
+        tk.Label(frame,
+                 text="Browse to the root of the card — the folder that contains Roms/ and BIOS/.",
+                 fg=DIM, bg=BG, font=("Helvetica", 9), anchor="w").pack(fill="x", pady=(2, 4))
 
         row = tk.Frame(frame, bg=BG)
-        row.pack(fill="x", pady=(4, 0))
+        row.pack(fill="x")
         self._sd_entry = tk.Entry(row, textvariable=self._sd_path, width=52,
                                    bg=ENT, fg=FG, insertbackground=FG, relief="flat",
                                    font=("Helvetica", 10))
         self._sd_entry.pack(side="left", fill="x", expand=True, ipady=4)
-        tk.Button(row, text="Browse", command=self._browse,
+        tk.Button(row, text="Browse…", command=self._browse,
                   bg=BTN, fg=FG, relief="flat", padx=10, cursor="hand2").pack(side="left", padx=(6, 0))
 
-        self._detect_lbl = tk.Label(frame, text="", fg="#a6adc8", bg=BG, font=("Helvetica", 9))
+        self._detect_lbl = tk.Label(frame, text="", fg=SUB, bg=BG, font=("Helvetica", 9))
         self._detect_lbl.pack(anchor="w", pady=(4, 0))
 
-        # Onion OS status banner
+        # ── Onion OS warning banner ───────────────────────────────────────────
         self._onion_frame = tk.Frame(self, bg="#313244", padx=PAD, pady=8)
-        self._onion_frame.pack(fill="x", padx=PAD, pady=(0, 8))
         self._onion_lbl = tk.Label(self._onion_frame, text="", fg="#fab387", bg="#313244",
-                                    font=("Helvetica", 9), justify="left", anchor="w")
+                                    font=("Helvetica", 9), justify="left", anchor="w",
+                                    wraplength=380)
         self._onion_lbl.pack(side="left", fill="x", expand=True)
         self._onion_btn = tk.Button(self._onion_frame, text="Get Onion OS →",
                                      command=lambda: webbrowser.open(ONION_URL),
                                      bg="#45475a", fg="#89b4fa", relief="flat",
                                      padx=8, cursor="hand2", font=("Helvetica", 9))
-        self._onion_frame.pack_forget()  # hidden until needed
+        self._onion_frame.pack_forget()
 
-        # Action buttons
+        # ── Action buttons ────────────────────────────────────────────────────
+        tk.Label(self, text="Step 2 — Install or remove PocketOS",
+                 fg=FG, bg=BG, font=("Helvetica", 10, "bold"),
+                 anchor="w", padx=PAD).pack(fill="x")
+
         btnframe = tk.Frame(self, bg=BG, padx=PAD)
-        btnframe.pack(fill="x", pady=(0, 8))
+        btnframe.pack(fill="x", pady=(6, 8))
 
-        self._install_btn = tk.Button(btnframe, text="Install PocketOS",
+        self._install_btn = tk.Button(btnframe, text="⬇  Install PocketOS",
                                        command=self._do_install,
                                        bg=ACC, fg="#1e1e2e",
                                        font=("Helvetica", 12, "bold"),
                                        relief="flat", padx=16, pady=10, cursor="hand2")
         self._install_btn.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        self._remove_btn = tk.Button(btnframe, text="Uninstall",
+        self._remove_btn = tk.Button(btnframe, text="Remove",
                                       command=self._do_uninstall,
                                       bg=BTN, fg=RED,
                                       font=("Helvetica", 11),
                                       relief="flat", padx=16, pady=10, cursor="hand2")
         self._remove_btn.pack(side="left")
 
-        # Progress + log
-        self._progress = ttk.Progressbar(self, mode="indeterminate")
-        self._progress.pack(fill="x", padx=PAD, pady=(0, 6))
+        tk.Label(self,
+                 text="Install copies the launcher to your SD card.  Remove restores the default Onion menu.",
+                 fg=DIM, bg=BG, font=("Helvetica", 8), anchor="w", padx=PAD).pack(fill="x")
 
-        self._log = scrolledtext.ScrolledText(self, height=10, width=64,
+        # ── Progress + log ────────────────────────────────────────────────────
+        self._progress = ttk.Progressbar(self, mode="indeterminate")
+        self._progress.pack(fill="x", padx=PAD, pady=(8, 4))
+
+        tk.Label(self, text="Progress log", fg=DIM, bg=BG,
+                 font=("Helvetica", 8), anchor="w", padx=PAD).pack(fill="x")
+
+        self._log = scrolledtext.ScrolledText(self, height=9, width=64,
                                                bg="#181825", fg=FG,
                                                font=("Courier", 9), relief="flat",
                                                state="disabled")
-        self._log.pack(padx=PAD, pady=(0, PAD), fill="both")
+        self._log.pack(padx=PAD, pady=(2, PAD), fill="both")
 
-        self._status = tk.Label(self, text="Select your SD card to get started.",
-                                 fg="#a6adc8", bg="#181825",
+        self._status = tk.Label(self, text="Insert your SD card and select it above to get started.",
+                                 fg=SUB, bg="#181825",
                                  font=("Helvetica", 9), anchor="w", padx=8)
         self._status.pack(fill="x", side="bottom")
 
@@ -227,7 +287,8 @@ class App(tk.Tk):
 
         if candidates:
             self._sd_path.set(candidates[0])
-            self._detect_lbl.config(text="✓ Miyoo SD card detected automatically", fg="#a6e3a1")
+            self._detect_lbl.config(text="✓ Miyoo SD card detected automatically — ready to install", fg="#a6e3a1")
+            self._status.config(text="SD card found automatically. Click Install PocketOS when ready.")
 
     def _browse(self):
         d = filedialog.askdirectory(title="Select the root of your Miyoo SD card")
@@ -241,16 +302,18 @@ class App(tk.Tk):
             return
 
         if detect_sd(p):
-            self._detect_lbl.config(text="✓ Looks like a valid Miyoo SD card", fg="#a6e3a1")
+            self._detect_lbl.config(text="✓ Looks like a valid Miyoo SD card — ready to install", fg="#a6e3a1")
+            self._status.config(text="SD card selected. Click Install PocketOS when ready.")
         else:
             self._detect_lbl.config(
-                text="⚠ Couldn't confirm this is a Miyoo SD card — make sure you've selected the root",
+                text="⚠  This doesn't look like the SD card root — make sure you selected the top-level folder, not a subfolder",
                 fg="#fab387")
+            self._status.config(text="Wrong folder selected — select the root of the SD card.")
 
         if detect_sd(p) and not detect_onion(p):
             self._onion_lbl.config(
-                text="⚠ Onion OS doesn't appear to be installed on this card.\n"
-                     "PocketOS requires Onion OS — install it first, then come back.")
+                text="⚠  Onion OS not detected on this card.\n"
+                     "PocketOS runs on top of Onion OS — you need to install Onion first, then come back here.")
             self._onion_btn.pack(side="right")
             self._onion_frame.pack(fill="x", padx=16, pady=(0, 8))
         else:
@@ -276,27 +339,34 @@ class App(tk.Tk):
     def _do_install(self):
         sd = Path(self._sd_path.get().strip())
         if not sd.is_dir():
-            messagebox.showerror("Error", "Please select a valid SD card folder.")
+            messagebox.showerror("No SD Card Selected",
+                                 "Please select the root folder of your Miyoo SD card first.\n\n"
+                                 "It's the top-level folder that contains Roms/, BIOS/, etc.")
             return
 
         if not PAYLOAD_BIN.exists():
-            messagebox.showerror("Error", f"Installer payload not found.\nExpected: {PAYLOAD_BIN}")
+            messagebox.showerror("Installer Error",
+                                 f"PocketOS payload not found inside the installer.\n\n"
+                                 f"Try re-downloading the installer from the releases page.\n\n"
+                                 f"Expected: {PAYLOAD_BIN}")
             return
 
         self._log.config(state="normal")
         self._log.delete("1.0", "end")
         self._log.config(state="disabled")
         self._set_busy(True)
-        self._status.config(text="Installing...")
+        self._status.config(text="Installing — please wait, don't eject the SD card...")
 
         def _run():
             try:
                 install(sd, self._log_line)
-                self.after(0, lambda: self._status.config(text="Installation complete!"))
+                self.after(0, lambda: self._status.config(
+                    text="✓ Done! Eject your SD card safely, then power on your device."))
                 self.after(0, lambda: self._offer_genre_scan(sd))
             except Exception as e:
-                self._log_line(f"\nERROR: {e}")
-                self.after(0, lambda: self._status.config(text="Installation failed."))
+                self._log_line(f"\n✗ ERROR: {e}")
+                self.after(0, lambda: self._status.config(
+                    text="Installation failed — check the log above for details."))
             finally:
                 self.after(0, lambda: self._set_busy(False))
 
@@ -307,17 +377,18 @@ class App(tk.Tk):
         if not missing:
             return
 
-        systems_str = ", ".join(missing[:6])
-        if len(missing) > 6:
-            systems_str += f" and {len(missing) - 6} more"
+        systems_str = "\n  • ".join(missing[:8])
+        if len(missing) > 8:
+            systems_str += f"\n  • … and {len(missing) - 8} more"
 
         answer = messagebox.askyesno(
-            "Set up Browse by Genre?",
+            "Enable Browse by Genre?",
             f"PocketOS is installed!\n\n"
-            f"Found {len(missing)} system(s) with ROMs but no genre data:\n"
-            f"{systems_str}\n\n"
-            f"Would you like to run the Genre Scanner now to enable\n"
-            f"Browse by Genre in PocketOS?"
+            f"Found {len(missing)} system(s) with ROMs but no genre data:\n\n"
+            f"  • {systems_str}\n\n"
+            f"The Genre Scanner can read your ROM files and automatically\n"
+            f"sort them by genre so Browse by Genre works in PocketOS.\n\n"
+            f"Run the Genre Scanner now?"
         )
         if not answer:
             return
@@ -327,15 +398,14 @@ class App(tk.Tk):
             subprocess.Popen([str(scanner)], close_fds=True)
         else:
             messagebox.showinfo(
-                "Genre Scanner",
-                "Couldn't find the Genre Scanner automatically.\n\n"
-                "Download PocketOS-GenreScanner for your platform from\n"
-                "the same release page and run it separately."
+                "Genre Scanner Not Found",
+                "Couldn't find the Genre Scanner next to this installer.\n\n"
+                "Download  PocketOS-GenreScanner  for your platform from\n"
+                "the same releases page and run it separately.\n\n"
+                "Point it at the same SD card and it will set everything up."
             )
 
     def _find_genre_scanner(self) -> Path | None:
-        """Try to find the genre scanner executable next to this installer."""
-        candidates = []
         if getattr(sys, "frozen", False):
             base = Path(sys.executable).parent
         else:
@@ -345,39 +415,44 @@ class App(tk.Tk):
                      "PocketOS-GenreScanner-windows.exe", "genre_scanner.py"]:
             p = base / name
             if p.exists():
-                candidates.append(p)
+                if p.suffix != ".py":
+                    return p
 
-        if not candidates:
-            return None
+        for name in ["genre_scanner.py"]:
+            p = base / name
+            if p.exists():
+                return p
 
-        # prefer native binary over .py
-        for c in candidates:
-            if c.suffix != ".py":
-                return c
-        return candidates[0]
+        return None
 
     def _do_uninstall(self):
         sd = Path(self._sd_path.get().strip())
         if not sd.is_dir():
-            messagebox.showerror("Error", "Please select a valid SD card folder.")
+            messagebox.showerror("No SD Card Selected",
+                                 "Please select the root folder of your Miyoo SD card first.")
             return
-        if not messagebox.askyesno("Uninstall PocketOS",
-                                    "This will remove PocketOS and restore the default Onion OS menu.\n\nContinue?"):
+        if not messagebox.askyesno("Remove PocketOS?",
+                                    "This will remove PocketOS from your SD card.\n\n"
+                                    "The default Onion OS menu will return on next boot.\n"
+                                    "Your games, saves, and settings are not affected.\n\n"
+                                    "Continue?"):
             return
 
         self._log.config(state="normal")
         self._log.delete("1.0", "end")
         self._log.config(state="disabled")
         self._set_busy(True)
-        self._status.config(text="Uninstalling...")
+        self._status.config(text="Removing PocketOS — please wait, don't eject the SD card...")
 
         def _run():
             try:
                 uninstall(sd, self._log_line)
-                self.after(0, lambda: self._status.config(text="Uninstalled."))
+                self.after(0, lambda: self._status.config(
+                    text="✓ Done! Eject your SD card safely, then power on your device."))
             except Exception as e:
-                self._log_line(f"\nERROR: {e}")
-                self.after(0, lambda: self._status.config(text="Uninstall failed."))
+                self._log_line(f"\n✗ ERROR: {e}")
+                self.after(0, lambda: self._status.config(
+                    text="Removal failed — check the log above for details."))
             finally:
                 self.after(0, lambda: self._set_busy(False))
 
