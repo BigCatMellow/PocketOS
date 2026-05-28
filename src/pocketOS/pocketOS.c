@@ -15,6 +15,7 @@
 #include <SDL/SDL_ttf.h>
 #include <dirent.h>
 #include <math.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -908,20 +909,34 @@ static int cmp_play_entry(const void *a, const void *b) {
 
 // -- Debug logging ------------------------------------------------------------
 
-static void log_msg(const char *msg) {
-    FILE *f = fopen(LOG_PATH, "a");
-    if (!f) return;
+// ── Logger ────────────────────────────────────────────────────────────────────
+// Single persistent file handle; opened once at startup, flushed after every
+// write so the last line in the file is always the last thing that ran.
+
+#define LOG_MAX_BYTES (512 * 1024)   /* rotate when log exceeds 512 KB */
+
+static FILE *g_log_fp = NULL;
+
+static void log_timestamp(FILE *f) {
     time_t now = time(NULL);
-    fprintf(f, "[%ld] pocketOS: %s\n", (long)now, msg);
-    fclose(f);
+    struct tm *tm = localtime(&now);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
+    fprintf(f, "[%s] ", ts);
+}
+
+static void log_msg(const char *msg) {
+    if (!g_log_fp) return;
+    log_timestamp(g_log_fp);
+    fprintf(g_log_fp, "%s\n", msg);
+    fflush(g_log_fp);
 }
 
 static void log_kv(const char *key, const char *value) {
-    FILE *f = fopen(LOG_PATH, "a");
-    if (!f) return;
-    time_t now = time(NULL);
-    fprintf(f, "[%ld] pocketOS: %s=%s\n", (long)now, key, value ? value : "");
-    fclose(f);
+    if (!g_log_fp) return;
+    log_timestamp(g_log_fp);
+    fprintf(g_log_fp, "%s: %s\n", key, value ? value : "(null)");
+    fflush(g_log_fp);
 }
 
 static void log_int(const char *key, int value) {
@@ -931,23 +946,124 @@ static void log_int(const char *key, int value) {
 }
 
 static void log_errno_msg(const char *context, const char *path) {
-    char msg[640];
-    snprintf(msg, sizeof(msg), "%s path=%s errno=%d error=%s",
-             context, path ? path : "", errno, strerror(errno));
-    log_msg(msg);
+    if (!g_log_fp) return;
+    log_timestamp(g_log_fp);
+    fprintf(g_log_fp, "ERROR %s: path=%s  errno=%d (%s)\n",
+            context, path ? path : "", errno, strerror(errno));
+    fflush(g_log_fp);
 }
 
 static void log_file_state(const char *label, const char *path) {
+    if (!g_log_fp) return;
     struct stat st;
-    char msg[768];
-    if (stat(path, &st) == 0) {
-        snprintf(msg, sizeof(msg), "%s path=%s exists=1 size=%ld mode=%o",
-                 label, path, (long)st.st_size, (unsigned)(st.st_mode & 0777));
-    } else {
-        snprintf(msg, sizeof(msg), "%s path=%s exists=0 errno=%d error=%s",
-                 label, path, errno, strerror(errno));
+    log_timestamp(g_log_fp);
+    if (stat(path, &st) == 0)
+        fprintf(g_log_fp, "%s: %s  [exists size=%ld mode=%04o]\n",
+                label, path, (long)st.st_size, (unsigned)(st.st_mode & 0777));
+    else
+        fprintf(g_log_fp, "%s: %s  [MISSING errno=%d %s]\n",
+                label, path, errno, strerror(errno));
+    fflush(g_log_fp);
+}
+
+static void log_sdl_error(const char *context) {
+    if (!g_log_fp) return;
+    log_timestamp(g_log_fp);
+    fprintf(g_log_fp, "SDL ERROR %s: %s\n", context, SDL_GetError());
+    fflush(g_log_fp);
+}
+
+/* Signal handler — logs the signal then re-raises so the OS still gets it */
+static const char *g_log_path_static = LOG_PATH;
+static void sig_handler(int sig) {
+    /* async-signal-safe: use write() not fprintf */
+    FILE *f = fopen(g_log_path_static, "a");
+    if (f) {
+        time_t now = time(NULL);
+        struct tm *tm = localtime(&now);
+        char ts[32];
+        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
+        const char *signame =
+            sig == SIGSEGV ? "SIGSEGV (segfault)" :
+            sig == SIGABRT ? "SIGABRT (abort)"    :
+            sig == SIGFPE  ? "SIGFPE (fpe)"       :
+            sig == SIGBUS  ? "SIGBUS (bus error)"  :
+            sig == SIGILL  ? "SIGILL (illegal op)" : "UNKNOWN";
+        fprintf(f, "[%s] *** CRASH signal=%d (%s) ***\n", ts, sig, signame);
+        fclose(f);
     }
-    log_msg(msg);
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void log_open(void) {
+    /* Rotate if log is too large */
+    struct stat st;
+    if (stat(LOG_PATH, &st) == 0 && st.st_size > LOG_MAX_BYTES) {
+        char old[256];
+        snprintf(old, sizeof(old), "%s.old", LOG_PATH);
+        rename(LOG_PATH, old);
+    }
+
+    /* Ensure log directory exists */
+    char dir[256];
+    snprintf(dir, sizeof(dir), "%s", LOG_PATH);
+    char *slash = strrchr(dir, '/');
+    if (slash) { *slash = '\0'; mkdir(dir, 0755); }
+
+    g_log_fp = fopen(LOG_PATH, "a");
+    if (!g_log_fp) return;
+
+    /* Session header */
+    fprintf(g_log_fp, "\n");
+    fprintf(g_log_fp, "========================================\n");
+    log_timestamp(g_log_fp);
+    fprintf(g_log_fp, "PocketOS v1.0  started\n");
+    fprintf(g_log_fp, "========================================\n");
+    fflush(g_log_fp);
+
+    /* Register crash signal handlers */
+    signal(SIGSEGV, sig_handler);
+    signal(SIGABRT, sig_handler);
+    signal(SIGFPE,  sig_handler);
+    signal(SIGBUS,  sig_handler);
+    signal(SIGILL,  sig_handler);
+}
+
+static void log_close(void) {
+    if (!g_log_fp) return;
+    log_msg("PocketOS exiting normally");
+    fclose(g_log_fp);
+    g_log_fp = NULL;
+}
+
+/* State names for readable state-transition logging */
+static const char *state_name(int s) {
+    switch (s) {
+        case 0:  return "HOME";
+        case 1:  return "FAVORITES";
+        case 2:  return "RECENT";
+        case 3:  return "SYSTEMS";
+        case 4:  return "GAMES";
+        case 5:  return "APPS";
+        case 6:  return "SETTINGS";
+        case 7:  return "BROWSE_CATS";
+        case 8:  return "BROWSE_GAMES";
+        case 9:  return "INFO_PANEL";
+        default: return "UNKNOWN";
+    }
+}
+
+static int g_prev_state = -1;
+static void log_state_if_changed(int cur) {
+    if (cur == g_prev_state) return;
+    if (!g_log_fp) return;
+    log_timestamp(g_log_fp);
+    fprintf(g_log_fp, "state: %s → %s\n",
+            g_prev_state >= 0 ? state_name(g_prev_state) : "START",
+            state_name(cur));
+    fflush(g_log_fp);
+    g_prev_state = cur;
 }
 
 static void fill_rect(int x, int y, int w, int h, Uint32 color);
@@ -3691,27 +3807,38 @@ static void load_theme(char *font_out, int font_outlen) {
 
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
+    log_open();
     log_msg("pocketOS main start");
     const char *autotest_env = getenv("POCKETOS_AUTOTEST_FRAMES");
     int autotest_frames = autotest_env ? atoi(autotest_env) : 0;
     int frames = 0;
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        log_kv("SDL_Init failed", SDL_GetError());
+        log_sdl_error("SDL_Init");
+        log_close();
         return 1;
     }
+    log_msg("SDL_Init OK");
     SDL_ShowCursor(SDL_DISABLE);
     SDL_EnableKeyRepeat(280, 60);
-    TTF_Init();
-    IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
+
+    if (TTF_Init() != 0) {
+        log_sdl_error("TTF_Init");
+    } else {
+        log_msg("TTF_Init OK");
+    }
+    int img_flags = IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
+    log_kv("IMG_Init flags", (img_flags & IMG_INIT_PNG) ? "PNG+JPG" : "partial");
     init_audio();
 
     video  = SDL_SetVideoMode(SCREEN_W, SCREEN_H, BPP, SDL_HWSURFACE | SDL_DOUBLEBUF);
     screen = SDL_CreateRGBSurface(SDL_HWSURFACE, SCREEN_W, SCREEN_H, BPP, 0, 0, 0, 0);
     if (!video || !screen) {
-        log_kv("video init failed", SDL_GetError());
+        log_sdl_error("video init");
+        log_close();
         return 1;
     }
+    log_msg("video surface OK");
 
     // Apply Onion's timezone so localtime() returns correct local time
     {
@@ -3750,10 +3877,14 @@ int main(int argc, char *argv[]) {
     if (!font_large) font_large = TTF_OpenFont(FONT_ALT, 26);
     if (!font_small) font_small = TTF_OpenFont(FONT_ALT, 14);
     if (!font_body || !font_game || !font_large || !font_small) {
-        fprintf(stderr, "pocketOS: failed to load fonts\n");
-        log_msg("font load failed");
+        log_msg("ERROR: font load failed — no usable font found");
+        log_file_state("font_path", FONT_PATH);
+        log_file_state("font_primary", FONT_PRIMARY);
+        log_file_state("font_alt", FONT_ALT);
+        log_close();
         return 1;
     }
+    log_msg("fonts loaded OK");
 
     // Resolve palette defaults — retro cream/navy/lavender per design guide
     C_BG          = RGBA(0xF1, 0xEB, 0xDD);
@@ -3777,6 +3908,8 @@ int main(int argc, char *argv[]) {
 
     SDL_Event ev;
     while (running) {
+        log_state_if_changed((int)state);
+
         /* Screenshot combo: L1 + L2 + R1 + R2 all held */
         {
             Uint8 *ks = SDL_GetKeyState(NULL);
@@ -3851,6 +3984,6 @@ int main(int argc, char *argv[]) {
     TTF_Quit();
     IMG_Quit();
     SDL_Quit();
-    log_msg("pocketOS main exit");
+    log_close();
     return 0;
 }
