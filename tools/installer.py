@@ -8,6 +8,8 @@ import os
 import sys
 import shutil
 import threading
+import subprocess
+import webbrowser
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 from pathlib import Path
@@ -21,12 +23,40 @@ else:
 PAYLOAD_BIN = BASE_DIR / ".tmp_update" / "bin" / "pocketOS"
 PAYLOAD_RES = BASE_DIR / ".tmp_update" / "res" / "pocketos"
 
+ONION_URL = "https://github.com/OnionUI/Onion/releases/latest"
+
 VERSION = "v1.0"
 
 
 def detect_sd(path: Path) -> bool:
     """Check if this looks like a Miyoo SD card root."""
     return (path / ".tmp_update").is_dir() and (path / "Roms").is_dir()
+
+
+def detect_onion(path: Path) -> bool:
+    """Check if Onion OS appears to be installed."""
+    return (path / "miyoo" / "app" / "MainUI").exists() or \
+           (path / ".tmp_update" / "onion_version").exists() or \
+           (path / "BIOS").is_dir()
+
+
+def roms_missing_gamelists(sd: Path) -> list:
+    """Return list of system folders under Roms/ that have ROMs but no miyoogamelist.xml."""
+    roms_dir = sd / "Roms"
+    missing = []
+    if not roms_dir.is_dir():
+        return missing
+    for system in sorted(roms_dir.iterdir()):
+        if not system.is_dir():
+            continue
+        has_roms = any(
+            f.suffix.lower() not in {".xml", ".db", ".txt", ""}
+            for f in system.iterdir() if f.is_file()
+        )
+        has_gamelist = (system / "miyoogamelist.xml").exists()
+        if has_roms and not has_gamelist:
+            missing.append(system.name)
+    return missing
 
 
 def install(sd: Path, log):
@@ -124,6 +154,18 @@ class App(tk.Tk):
         self._detect_lbl = tk.Label(frame, text="", fg="#a6adc8", bg=BG, font=("Helvetica", 9))
         self._detect_lbl.pack(anchor="w", pady=(4, 0))
 
+        # Onion OS status banner
+        self._onion_frame = tk.Frame(self, bg="#313244", padx=PAD, pady=8)
+        self._onion_frame.pack(fill="x", padx=PAD, pady=(0, 8))
+        self._onion_lbl = tk.Label(self._onion_frame, text="", fg="#fab387", bg="#313244",
+                                    font=("Helvetica", 9), justify="left", anchor="w")
+        self._onion_lbl.pack(side="left", fill="x", expand=True)
+        self._onion_btn = tk.Button(self._onion_frame, text="Get Onion OS →",
+                                     command=lambda: webbrowser.open(ONION_URL),
+                                     bg="#45475a", fg="#89b4fa", relief="flat",
+                                     padx=8, cursor="hand2", font=("Helvetica", 9))
+        self._onion_frame.pack_forget()  # hidden until needed
+
         # Action buttons
         btnframe = tk.Frame(self, bg=BG, padx=PAD)
         btnframe.pack(fill="x", pady=(0, 8))
@@ -160,7 +202,6 @@ class App(tk.Tk):
         self._sd_path.trace_add("write", lambda *_: self._validate())
 
     def _auto_detect(self):
-        """Try to find the SD card automatically."""
         candidates = []
         if sys.platform == "win32":
             import string
@@ -174,13 +215,13 @@ class App(tk.Tk):
                     for child in mount.iterdir():
                         if detect_sd(child):
                             candidates.append(str(child))
-                        for grandchild in child.iterdir() if child.is_dir() else []:
+                        for grandchild in (child.iterdir() if child.is_dir() else []):
                             if detect_sd(grandchild):
                                 candidates.append(str(grandchild))
 
         if candidates:
             self._sd_path.set(candidates[0])
-            self._detect_lbl.config(text=f"✓ Miyoo SD card detected automatically", fg="#a6e3a1")
+            self._detect_lbl.config(text="✓ Miyoo SD card detected automatically", fg="#a6e3a1")
 
     def _browse(self):
         d = filedialog.askdirectory(title="Select the root of your Miyoo SD card")
@@ -189,13 +230,25 @@ class App(tk.Tk):
 
     def _validate(self):
         p = Path(self._sd_path.get().strip())
-        if p.is_dir():
-            if detect_sd(p):
-                self._detect_lbl.config(text="✓ Looks like a valid Miyoo SD card", fg="#a6e3a1")
-            else:
-                self._detect_lbl.config(
-                    text="⚠ Couldn't confirm this is a Miyoo SD card — make sure you've selected the root",
-                    fg="#fab387")
+        if not p.is_dir():
+            self._onion_frame.pack_forget()
+            return
+
+        if detect_sd(p):
+            self._detect_lbl.config(text="✓ Looks like a valid Miyoo SD card", fg="#a6e3a1")
+        else:
+            self._detect_lbl.config(
+                text="⚠ Couldn't confirm this is a Miyoo SD card — make sure you've selected the root",
+                fg="#fab387")
+
+        if detect_sd(p) and not detect_onion(p):
+            self._onion_lbl.config(
+                text="⚠ Onion OS doesn't appear to be installed on this card.\n"
+                     "PocketOS requires Onion OS — install it first, then come back.")
+            self._onion_btn.pack(side="right")
+            self._onion_frame.pack(fill="x", padx=16, pady=(0, 8))
+        else:
+            self._onion_frame.pack_forget()
 
     def _log_line(self, text: str):
         def _do():
@@ -234,6 +287,7 @@ class App(tk.Tk):
             try:
                 install(sd, self._log_line)
                 self.after(0, lambda: self._status.config(text="Installation complete!"))
+                self.after(0, lambda: self._offer_genre_scan(sd))
             except Exception as e:
                 self._log_line(f"\nERROR: {e}")
                 self.after(0, lambda: self._status.config(text="Installation failed."))
@@ -241,6 +295,60 @@ class App(tk.Tk):
                 self.after(0, lambda: self._set_busy(False))
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def _offer_genre_scan(self, sd: Path):
+        missing = roms_missing_gamelists(sd)
+        if not missing:
+            return
+
+        systems_str = ", ".join(missing[:6])
+        if len(missing) > 6:
+            systems_str += f" and {len(missing) - 6} more"
+
+        answer = messagebox.askyesno(
+            "Set up Browse by Genre?",
+            f"PocketOS is installed!\n\n"
+            f"Found {len(missing)} system(s) with ROMs but no genre data:\n"
+            f"{systems_str}\n\n"
+            f"Would you like to run the Genre Scanner now to enable\n"
+            f"Browse by Genre in PocketOS?"
+        )
+        if not answer:
+            return
+
+        scanner = self._find_genre_scanner()
+        if scanner:
+            subprocess.Popen([str(scanner)], close_fds=True)
+        else:
+            messagebox.showinfo(
+                "Genre Scanner",
+                "Couldn't find the Genre Scanner automatically.\n\n"
+                "Download PocketOS-GenreScanner for your platform from\n"
+                "the same release page and run it separately."
+            )
+
+    def _find_genre_scanner(self) -> Path | None:
+        """Try to find the genre scanner executable next to this installer."""
+        candidates = []
+        if getattr(sys, "frozen", False):
+            base = Path(sys.executable).parent
+        else:
+            base = Path(__file__).parent
+
+        for name in ["PocketOS-GenreScanner-linux", "PocketOS-GenreScanner-macos",
+                     "PocketOS-GenreScanner-windows.exe", "genre_scanner.py"]:
+            p = base / name
+            if p.exists():
+                candidates.append(p)
+
+        if not candidates:
+            return None
+
+        # prefer native binary over .py
+        for c in candidates:
+            if c.suffix != ".py":
+                return c
+        return candidates[0]
 
     def _do_uninstall(self):
         sd = Path(self._sd_path.get().strip())
