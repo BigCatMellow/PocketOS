@@ -1452,6 +1452,50 @@ static void load_favorites(void) {
     favorite_offset = 0;
 }
 
+#define FAV_PATH POCKETOS_ROOT "/Roms/favourite.json"
+
+static int is_favorite(const char *rompath) {
+    for (int i = 0; i < favorite_count; i++)
+        if (strcmp(favorite_entries[i].rompath, rompath) == 0) return 1;
+    return 0;
+}
+
+static void toggle_favorite(const char *label, const char *rompath, const char *launch) {
+    int found = -1;
+    for (int i = 0; i < favorite_count; i++) {
+        if (strcmp(favorite_entries[i].rompath, rompath) == 0) { found = i; break; }
+    }
+
+    if (found >= 0) {
+        /* Remove: shift entries down */
+        for (int i = found; i < favorite_count - 1; i++)
+            favorite_entries[i] = favorite_entries[i + 1];
+        favorite_count--;
+    } else {
+        /* Add */
+        if (favorite_count < MAX_GAMES) {
+            PlayEntry *e = &favorite_entries[favorite_count++];
+            memset(e, 0, sizeof(*e));
+            strncpy(e->label,   label,   sizeof(e->label)   - 1);
+            strncpy(e->rompath, rompath, sizeof(e->rompath) - 1);
+            strncpy(e->launch,  launch,  sizeof(e->launch)  - 1);
+        }
+    }
+
+    /* Re-sort and write back */
+    qsort(favorite_entries, favorite_count, sizeof(PlayEntry), cmp_play_entry);
+
+    FILE *f = fopen(FAV_PATH, "w");
+    if (!f) { log_errno_msg("toggle_favorite write failed", FAV_PATH); return; }
+    for (int i = 0; i < favorite_count; i++) {
+        fprintf(f, "{\"label\":\"%s\",\"rompath\":\"%s\",\"launch\":\"%s\"}\n",
+                favorite_entries[i].label,
+                favorite_entries[i].rompath,
+                favorite_entries[i].launch);
+    }
+    fclose(f);
+}
+
 // ── Launch a game ─────────────────────────────────────────────────────────────
 
 static void launch_game(int sys_idx, int game_idx) {
@@ -2206,7 +2250,7 @@ static void draw_hint_base(void) {
 // Design guide: small rectangular pills, A=green, B=red, L/R=gray.
 static void draw_hints_row(const char *al, const char *bl,
                            const char *l_lbl, const char *r_lbl,
-                           const char *lr_text) {
+                           const char *lr_text, const char *yl) {
     int hy = SCREEN_H - HINT_H;
     // Pill dimensions: 26w x 18h (13x9 logical)
     int pw = 26, ph = 18;
@@ -2245,6 +2289,20 @@ static void draw_hints_row(const char *al, const char *bl,
         draw_text(font_small, bl, x + adv + 5, ty, SC_WHITE);
         x += adv + 5 + text_w(font_small, bl) + 14;
     }
+    if (yl) {
+        /* Y button: Xbox yellow */
+        Uint32 cy_bg = RGBA(0xC4, 0x9E, 0x1B), cy_bd = RGBA(0xF0, 0xD8, 0x80);
+        int adv;
+        if (load_asset("prompt_y.png")) {
+            draw_asset("prompt_y.png", x, hy + 4, icon_h, icon_h);
+            adv = icon_h;
+        } else {
+            draw_btn_pill(x, py, pw, ph, cy_bd, cy_bg, "Y");
+            adv = pw;
+        }
+        draw_text(font_small, yl, x + adv + 5, ty, SC_WHITE);
+        x += adv + 5 + text_w(font_small, yl) + 14;
+    }
     if (l_lbl && r_lbl && lr_text) {
         int adv_l, adv_r;
         if (load_asset("prompt_l.png")) {
@@ -2271,12 +2329,12 @@ __attribute__((unused))
 static void draw_hints(const char *text) {
     draw_hint_base();
     (void)text;
-    draw_hints_row("Select", "Back", "L", "R", "Page");
+    draw_hints_row("Select", "Back", "L", "R", "Page", NULL);
 }
 
 static void draw_home_hints(void) {
     draw_hint_base();
-    draw_hints_row("Select", "Back", NULL, NULL, NULL);
+    draw_hints_row("Select", "Back", NULL, NULL, NULL, NULL);
     // Right side: d-pad up/down hint using PNG asset if available
     int hy = SCREEN_H - HINT_H;
     int ty = hy + (HINT_H - 16) / 2;
@@ -2334,7 +2392,10 @@ static void draw_panel(void) {
     fill_rect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Select", "Back", "L", "R", "Page");
+    if (state == STATE_GAMES)
+        draw_hints_row("Launch", "Back", "L", "R", "Page", "Favorite");
+    else
+        draw_hints_row("Select", "Back", "L", "R", "Page", NULL);
 
     // ── Left: systems ──
     draw_panel_asset(6, CONTENT_Y + 6, LEFT_W - 10, CONTENT_H - 12);
@@ -2409,14 +2470,21 @@ static void draw_panel(void) {
             if (sel) draw_select_asset(rx + 10, iy + 4, rw - 20, GAME_ITEM_H - 8);
             else fill_rect(rx + 10, iy + GAME_ITEM_H - 1, rw - 20, 1, C_SEP);
 
+            int fav = is_favorite(games[gi].path);
+            int star_w = fav ? text_w(font_game, "\xe2\x98\x85") + 4 : 0;
             char line1[240], line2[240];
             wrap_text(font_game, games[gi].name,
-                      line1, sizeof(line1), line2, sizeof(line2), rw - 32);
+                      line1, sizeof(line1), line2, sizeof(line2), rw - 32 - star_w);
             int ty = line2[0] ? iy + (GAME_ITEM_H - GAME_LINE_GAP - 22) / 2
                               : iy + (GAME_ITEM_H - 22) / 2;
-            draw_text(font_game, line1, rx + 14, ty, SC_TEXT);
+            if (fav) {
+                SDL_Color star_col = sel ? (SDL_Color){0xFF, 0xD7, 0x00, 0xFF}
+                                        : (SDL_Color){0xC4, 0x9E, 0x1B, 0xFF};
+                draw_text(font_game, "\xe2\x98\x85", rx + 14, ty, star_col);
+            }
+            draw_text(font_game, line1, rx + 14 + star_w, ty, SC_TEXT);
             if (line2[0])
-                draw_text(font_game, line2, rx + 14, ty + GAME_LINE_GAP, SC_TEXT);
+                draw_text(font_game, line2, rx + 14 + star_w, ty + GAME_LINE_GAP, SC_TEXT);
         }
         draw_scrollbar(SCREEN_W - 14, gy0, GAME_ROWS * GAME_ITEM_H, game_count, GAME_ROWS, game_offset);
     }
@@ -2427,7 +2495,7 @@ static void draw_entry_list(const char *title, PlayEntry *entries, int count,
     fill_rect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Select", "Back", "L", "R", "Tabs");
+    draw_hints_row("Select", "Back", "L", "R", "Tabs", NULL);
 
     draw_panel_asset(6, CONTENT_Y + 6, SCREEN_W - 12, CONTENT_H - 12);
     fill_rect(10, CONTENT_Y + 10, SCREEN_W - 20, PANEL_HDR_H, C_PANEL_HDR);
@@ -2600,9 +2668,9 @@ static void draw_browse(void) {
     draw_status();
     draw_hint_base();
     if (state == STATE_BROWSE_CATS)
-        draw_hints_row("Select", "Back", "L", "R", "Page");
+        draw_hints_row("Select", "Back", "L", "R", "Page", NULL);
     else
-        draw_hints_row("Launch", "Back", "L", "R", "Page");
+        draw_hints_row("Launch", "Back", "L", "R", "Page", NULL);
 
     if (browse_genre_count == 0) {
         draw_text(font_body, "No genre data. Scrape ROMs first.", 20, CONTENT_Y + 40, SC_DIM);
@@ -2746,7 +2814,7 @@ static void draw_apps(void) {
     draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Open", "Back", NULL, NULL, NULL);
+    draw_hints_row("Open", "Back", NULL, NULL, NULL, NULL);
 
     /* clamp scroll */
     if (app_sel < app_offset) app_offset = app_sel;
@@ -2908,7 +2976,7 @@ static void draw_settings(void) {
     draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Change", "Back", "L", "R", "Adjust");
+    draw_hints_row("Change", "Back", "L", "R", "Adjust", NULL);
 
     int clip_top    = CONTENT_Y;
     int clip_bottom = CONTENT_Y + CONTENT_H;
@@ -3165,7 +3233,7 @@ static void draw_font_picker(void) {
     draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Select", "Cancel", NULL, NULL, NULL);
+    draw_hints_row("Select", "Cancel", NULL, NULL, NULL, NULL);
 
     if (font_pick_sel < font_pick_offset) font_pick_offset = font_pick_sel;
     if (font_pick_sel >= font_pick_offset + HOME_VISIBLE) font_pick_offset = font_pick_sel - HOME_VISIBLE + 1;
@@ -3258,7 +3326,7 @@ static void draw_theme_picker(void) {
     draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Select", "Cancel", NULL, NULL, NULL);
+    draw_hints_row("Select", "Cancel", NULL, NULL, NULL, NULL);
 
     if (theme_pick_sel < theme_pick_offset) theme_pick_offset = theme_pick_sel;
     if (theme_pick_sel >= theme_pick_offset + HOME_VISIBLE)
@@ -3435,6 +3503,14 @@ static void on_games_key(SDLKey k) {
     if (game_sel != before) play_move();
     if (k == BTN_A) {
         launch_game(sys_sel, game_sel);
+    }
+    if (k == BTN_Y && game_count > 0) {
+        Game *g = &games[game_sel];
+        System *sys = &systems[sys_sel];
+        char launch[512];
+        snprintf(launch, sizeof(launch), "%s/launch.sh", sys->emu_dir);
+        toggle_favorite(g->name, g->path, launch);
+        play_select();
     }
     if (k == BTN_B || k == BTN_LEFT) {
         play_back();
