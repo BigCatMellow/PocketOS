@@ -125,13 +125,19 @@ class App(tk.Tk):
         BTN = "#45475a"
         RED = "#f38ba8"
 
-        # Header
-        tk.Label(self, text="PocketOS", font=("Helvetica", 22, "bold"),
-                 fg=ACC, bg=BG).pack(pady=(PAD, 0))
-        tk.Label(self, text=f"Installer  {VERSION}",
-                 font=("Helvetica", 11), fg="#a6adc8", bg=BG).pack()
-        tk.Label(self, text="A minimal launcher for the Miyoo Mini Plus\nBuilt on top of Onion OS",
-                 font=("Helvetica", 10), fg="#6c7086", bg=BG, justify="center").pack(pady=(4, PAD))
+        # Header — ASCII logo
+        LOGO = (
+            r" ____             _        _    ___  ____  " + "\n"
+            r"|  _ \ ___   ___ | | _____| |_ / _ \/ ___| " + "\n"
+            r"| |_) / _ \ / __|| |/ / _ \ __| | | \___ \ " + "\n"
+            r"|  __/ (_) | (__ |   <  __/ |_| |_| |___) |" + "\n"
+            r"|_|   \___/ \___||_|\_\___|\__|\___/|____/ " + "\n"
+            f"                       Installer  {VERSION}  "
+        )
+        tk.Label(self, text=LOGO, font=("Courier", 9, "bold"),
+                 fg=ACC, bg=BG, justify="center").pack(pady=(PAD, 4))
+        tk.Label(self, text="A minimal launcher for the Miyoo Mini Plus  ·  Built on Onion OS",
+                 font=("Helvetica", 9), fg="#6c7086", bg=BG, justify="center").pack(pady=(0, PAD))
 
         ttk.Separator(self, orient="horizontal").pack(fill="x", padx=PAD)
 
