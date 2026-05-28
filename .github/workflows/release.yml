@@ -72,16 +72,19 @@ jobs:
             sep: ':'
             installer_out: PocketOS-Installer-linux
             scanner_out:   PocketOS-GenreScanner-linux
+            archive_ext:   .tar.gz
           - os: windows-latest
             label: windows
             sep: ';'
             installer_out: PocketOS-Installer-windows.exe
             scanner_out:   PocketOS-GenreScanner-windows.exe
+            archive_ext:   ''
           - os: macos-latest
             label: macos
             sep: ':'
             installer_out: PocketOS-Installer-macos
             scanner_out:   PocketOS-GenreScanner-macos
+            archive_ext:   .tar.gz
 
     steps:
       - uses: actions/checkout@v4
@@ -131,17 +134,23 @@ jobs:
           --name ${{ matrix.scanner_out }}
           tools/genre_scanner.py
 
+      - name: Package Unix executables (Linux / macOS)
+        if: matrix.label != 'windows'
+        run: |
+          tar -czf dist/${{ matrix.installer_out }}.tar.gz -C dist ${{ matrix.installer_out }}
+          tar -czf dist/${{ matrix.scanner_out }}.tar.gz  -C dist ${{ matrix.scanner_out }}
+
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.installer_out }}
-          path: dist/${{ matrix.installer_out }}
+          path: dist/${{ matrix.installer_out }}${{ matrix.archive_ext }}
 
       - name: Upload genre scanner
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.scanner_out }}
-          path: dist/${{ matrix.scanner_out }}
+          path: dist/${{ matrix.scanner_out }}${{ matrix.archive_ext }}
 
   # ── Create GitHub Release ───────────────────────────────────────────────────
   release:
@@ -187,18 +196,18 @@ jobs:
 
             | Platform | Download |
             |----------|---------|
-            | Linux    | `PocketOS-Installer-linux` |
-            | Windows  | `PocketOS-Installer-windows.exe` |
-            | macOS    | `PocketOS-Installer-macos` |
+            | Linux    | `PocketOS-Installer-linux.tar.gz` — extract, then run `./PocketOS-Installer-linux` |
+            | Windows  | `PocketOS-Installer-windows.exe` — run directly |
+            | macOS    | `PocketOS-Installer-macos.tar.gz` — extract, then run `./PocketOS-Installer-macos` |
 
             ### Genre Scanner
             Scans your ROM folders against OpenVGDB and writes `miyoogamelist.xml` files for Browse by Genre.
 
             | Platform | Download |
             |----------|---------|
-            | Linux    | `PocketOS-GenreScanner-linux` |
-            | Windows  | `PocketOS-GenreScanner-windows.exe` |
-            | macOS    | `PocketOS-GenreScanner-macos` |
+            | Linux    | `PocketOS-GenreScanner-linux.tar.gz` — extract, then run `./PocketOS-GenreScanner-linux` |
+            | Windows  | `PocketOS-GenreScanner-windows.exe` — run directly |
+            | macOS    | `PocketOS-GenreScanner-macos.tar.gz` — extract, then run `./PocketOS-GenreScanner-macos` |
 
             ---
 

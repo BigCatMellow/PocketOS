@@ -71,9 +71,9 @@ Download the installer for your platform from the [latest release](../../release
 
 | Platform | Download |
 |----------|---------|
-| Linux    | `PocketOS-Installer-linux` |
-| Windows  | `PocketOS-Installer-windows.exe` |
-| macOS    | `PocketOS-Installer-macos` |
+| Linux    | `PocketOS-Installer-linux.tar.gz` — extract, then run `./PocketOS-Installer-linux` |
+| Windows  | `PocketOS-Installer-windows.exe` — run directly |
+| macOS    | `PocketOS-Installer-macos.tar.gz` — extract, then run `./PocketOS-Installer-macos` |
 
 ### Option B — Manual (SD card zip)
 1. Download `pocketOS-vX.X.zip` from the [latest release](../../releases/latest)
@@ -108,9 +108,9 @@ The Genre Scanner tool scans your ROM folders against the OpenVGDB database and 
 
 | Platform | Download |
 |----------|---------|
-| Linux    | `PocketOS-GenreScanner-linux` |
-| Windows  | `PocketOS-GenreScanner-windows.exe` |
-| macOS    | `PocketOS-GenreScanner-macos` |
+| Linux    | `PocketOS-GenreScanner-linux.tar.gz` — extract, then run `./PocketOS-GenreScanner-linux` |
+| Windows  | `PocketOS-GenreScanner-windows.exe` — run directly |
+| macOS    | `PocketOS-GenreScanner-macos.tar.gz` — extract, then run `./PocketOS-GenreScanner-macos` |
 
 ---
 
