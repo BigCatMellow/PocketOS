@@ -175,7 +175,8 @@ typedef enum {
     STATE_THEME_PICKER,
     STATE_BROWSE_CATS,
     STATE_BROWSE_GAMES,
-    STATE_INFO_PANEL
+    STATE_INFO_PANEL,
+    STATE_GAME_OPTIONS
 } State;
 
 static State state = STATE_HOME;
@@ -247,6 +248,13 @@ static Game games[MAX_GAMES];
 static int  game_count  = 0;
 static int  game_sel    = 0;
 static int  game_offset = 0;
+static int  game_opts_sel  = 0;   /* selected row in Game Options panel */
+static int  game_opts_mode = 0;   /* 0=menu, 1=rom_info, 2=save_info */
+static State game_opts_back = STATE_GAMES; /* which state to return to */
+static char game_opts_name[240];
+static char game_opts_path[512];
+static char game_opts_launch[512];
+static char game_opts_system[48];
 
 static PlayEntry recent_entries[MAX_GAMES];
 static int recent_count = 0;
@@ -1037,6 +1045,27 @@ static void log_close(void) {
     g_log_fp = NULL;
 }
 
+/* Elapsed-time timer — uses CLOCK_MONOTONIC for ms precision */
+typedef struct { struct timespec t0; const char *label; } LogTimer;
+
+static LogTimer log_timer_begin(const char *label) {
+    LogTimer lt;
+    lt.label = label;
+    clock_gettime(CLOCK_MONOTONIC, &lt.t0);
+    log_kv("TIMER begin", label);
+    return lt;
+}
+
+static void log_timer_end(LogTimer lt) {
+    struct timespec t1;
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    long ms = (t1.tv_sec  - lt.t0.tv_sec)  * 1000L
+            + (t1.tv_nsec - lt.t0.tv_nsec) / 1000000L;
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%s  %ldms", lt.label, ms);
+    log_kv("TIMER end", buf);
+}
+
 /* State names for readable state-transition logging */
 static const char *state_name(int s) {
     switch (s) {
@@ -1050,6 +1079,7 @@ static const char *state_name(int s) {
         case 7:  return "BROWSE_CATS";
         case 8:  return "BROWSE_GAMES";
         case 9:  return "INFO_PANEL";
+        case 10: return "GAME_OPTIONS";
         default: return "UNKNOWN";
     }
 }
@@ -1551,6 +1581,7 @@ static void load_play_entries(const char *path, PlayEntry *entries, int *count, 
 }
 
 static void load_recent(void) {
+    LogTimer _t = log_timer_begin("load_recent");
     load_play_entries(POCKETOS_ROOT "/Roms/recentlist.json",
                       recent_entries, &recent_count, 0);
     if (recent_count == 0) {
@@ -1559,13 +1590,16 @@ static void load_recent(void) {
     }
     recent_sel = 0;
     recent_offset = 0;
+    log_timer_end(_t);
 }
 
 static void load_favorites(void) {
+    LogTimer _t = log_timer_begin("load_favorites");
     load_play_entries(POCKETOS_ROOT "/Roms/favourite.json",
                       favorite_entries, &favorite_count, 1);
     favorite_sel = 0;
     favorite_offset = 0;
+    log_timer_end(_t);
 }
 
 #define FAV_PATH POCKETOS_ROOT "/Roms/favourite.json"
@@ -2366,7 +2400,8 @@ static void draw_hint_base(void) {
 // Design guide: small rectangular pills, A=green, B=red, L/R=gray.
 static void draw_hints_row(const char *al, const char *bl,
                            const char *l_lbl, const char *r_lbl,
-                           const char *lr_text, const char *yl) {
+                           const char *lr_text, const char *yl,
+                           const char *xl) {
     int hy = SCREEN_H - HINT_H;
     // Pill dimensions: 26w x 18h (13x9 logical)
     int pw = 26, ph = 18;
@@ -2409,8 +2444,8 @@ static void draw_hints_row(const char *al, const char *bl,
         /* Y button: Xbox yellow */
         Uint32 cy_bg = RGBA(0xC4, 0x9E, 0x1B), cy_bd = RGBA(0xF0, 0xD8, 0x80);
         int adv;
-        if (load_asset("prompt_y.png")) {
-            draw_asset("prompt_y.png", x, hy + 4, icon_h, icon_h);
+        if (load_asset("xbox_button_color_y.png")) {
+            draw_asset("xbox_button_color_y.png", x, hy + 4, icon_h, icon_h);
             adv = icon_h;
         } else {
             draw_btn_pill(x, py, pw, ph, cy_bd, cy_bg, "Y");
@@ -2418,6 +2453,20 @@ static void draw_hints_row(const char *al, const char *bl,
         }
         draw_text(font_small, yl, x + adv + 5, ty, SC_WHITE);
         x += adv + 5 + text_w(font_small, yl) + 14;
+    }
+    if (xl) {
+        /* X button: Xbox blue */
+        Uint32 cx_bg = RGBA(0x1A, 0x6B, 0xC4), cx_bd = RGBA(0x80, 0xBE, 0xF0);
+        int adv;
+        if (load_asset("xbox_button_color_x.png")) {
+            draw_asset("xbox_button_color_x.png", x, hy + 4, icon_h, icon_h);
+            adv = icon_h;
+        } else {
+            draw_btn_pill(x, py, pw, ph, cx_bd, cx_bg, "X");
+            adv = pw;
+        }
+        draw_text(font_small, xl, x + adv + 5, ty, SC_WHITE);
+        x += adv + 5 + text_w(font_small, xl) + 14;
     }
     if (l_lbl && r_lbl && lr_text) {
         int adv_l, adv_r;
@@ -2445,12 +2494,12 @@ __attribute__((unused))
 static void draw_hints(const char *text) {
     draw_hint_base();
     (void)text;
-    draw_hints_row("Select", "Back", "L", "R", "Page", NULL);
+    draw_hints_row("Select", "Back", "L", "R", "Page", NULL, NULL);
 }
 
 static void draw_home_hints(void) {
     draw_hint_base();
-    draw_hints_row("Select", "Back", NULL, NULL, NULL, NULL);
+    draw_hints_row("Select", "Back", NULL, NULL, NULL, NULL, NULL);
     // Right side: d-pad up/down hint using PNG asset if available
     int hy = SCREEN_H - HINT_H;
     int ty = hy + (HINT_H - 16) / 2;
@@ -2509,9 +2558,9 @@ static void draw_panel(void) {
     draw_status();
     draw_hint_base();
     if (state == STATE_GAMES)
-        draw_hints_row("Launch", "Back", "L", "R", "Page", "Favorite");
+        draw_hints_row("Launch", "Back", "L", "R", "Page", "Favorite", "Options");
     else
-        draw_hints_row("Select", "Back", "L", "R", "Page", NULL);
+        draw_hints_row("Select", "Back", "L", "R", "Page", NULL, NULL);
 
     // ── Left: systems ──
     draw_panel_asset(6, CONTENT_Y + 6, LEFT_W - 10, CONTENT_H - 12);
@@ -2576,7 +2625,9 @@ static void draw_panel(void) {
     int gy0 = CONTENT_Y + PANEL_HDR_H + 12;
 
     if (game_count == 0) {
-        draw_text(font_body, "No games found", rx + 20, gy0 + 20, SC_DIM);
+        draw_text(font_body, "No games found.", rx + 20, gy0 + 24, SC_DIM);
+        draw_text(font_body, "Check that your ROMs are in the", rx + 20, gy0 + 52, SC_DIM);
+        draw_text(font_body, "correct folder for this system.", rx + 20, gy0 + 74, SC_DIM);
     } else {
         for (int i = 0; i < GAME_ROWS && game_offset + i < game_count; i++) {
             int gi  = game_offset + i;
@@ -2611,7 +2662,8 @@ static void draw_entry_list(const char *title, PlayEntry *entries, int count,
     fill_rect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Select", "Back", "L", "R", "Tabs", NULL);
+    draw_hints_row("Select", "Back", "L", "R", "Tabs", NULL,
+                   count > 0 ? "Options" : NULL);
 
     draw_panel_asset(6, CONTENT_Y + 6, SCREEN_W - 12, CONTENT_H - 12);
     fill_rect(10, CONTENT_Y + 10, SCREEN_W - 20, PANEL_HDR_H, C_PANEL_HDR);
@@ -2623,7 +2675,18 @@ static void draw_entry_list(const char *title, PlayEntry *entries, int count,
 
     int y0 = CONTENT_Y + PANEL_HDR_H + 12;
     if (count == 0) {
-        draw_text(font_body, "No entries found", 24, y0 + 24, SC_DIM);
+        const char *hint1 = NULL, *hint2 = NULL;
+        if (strcmp(title, "Favorites") == 0) {
+            hint1 = "No favorites yet.";
+            hint2 = "Press Y on any game in the Library to add one.";
+        } else if (strcmp(title, "Recent") == 0) {
+            hint1 = "No recent games yet.";
+            hint2 = "Play a game and it will appear here.";
+        } else {
+            hint1 = "Nothing here yet.";
+        }
+        draw_text(font_body, hint1, 24, y0 + 28, SC_DIM);
+        if (hint2) draw_text(font_body, hint2, 24, y0 + 58, SC_DIM);
         return;
     }
 
@@ -2784,12 +2847,14 @@ static void draw_browse(void) {
     draw_status();
     draw_hint_base();
     if (state == STATE_BROWSE_CATS)
-        draw_hints_row("Select", "Back", "L", "R", "Page", NULL);
+        draw_hints_row("Select", "Back", "L", "R", "Page", NULL, NULL);
     else
-        draw_hints_row("Launch", "Back", "L", "R", "Page", NULL);
+        draw_hints_row("Launch", "Back", "L", "R", "Page", NULL, NULL);
 
     if (browse_genre_count == 0) {
-        draw_text(font_body, "No genre data. Scrape ROMs first.", 20, CONTENT_Y + 40, SC_DIM);
+        draw_text(font_body, "No genre data found.", 20, CONTENT_Y + 36, SC_DIM);
+        draw_text(font_body, "Run the PocketOS Genre Scanner on your computer,", 20, CONTENT_Y + 64, SC_DIM);
+        draw_text(font_body, "then point it at this SD card.", 20, CONTENT_Y + 88, SC_DIM);
         return;
     }
 
@@ -2930,7 +2995,7 @@ static void draw_apps(void) {
     draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Open", "Back", NULL, NULL, NULL, NULL);
+    draw_hints_row("Open", "Back", NULL, NULL, NULL, NULL, NULL);
 
     /* clamp scroll */
     if (app_sel < app_offset) app_offset = app_sel;
@@ -2977,6 +3042,251 @@ static void draw_info_row(int x, int y, int w, const char *label, const char *va
     draw_text(font_body, label, x, y, SC_DIM);
     int vw = text_w(font_body, value);
     draw_text(font_body, value, x + w - vw, y, SC_TEXT);
+}
+
+// ── Game Options panel ─────────────────────────────────────────────────────────
+
+#define GOPTS_LAUNCH    0
+#define GOPTS_FAVORITE  1
+#define GOPTS_ROM_INFO  2
+#define GOPTS_SAVE_INFO 3
+#define GOPTS_COUNT     4
+
+static void enter_game_options(const char *name, const char *path,
+                               const char *launch, const char *system,
+                               State back_state) {
+    strncpy(game_opts_name,   name,   sizeof(game_opts_name)   - 1);
+    strncpy(game_opts_path,   path,   sizeof(game_opts_path)   - 1);
+    strncpy(game_opts_launch, launch, sizeof(game_opts_launch) - 1);
+    strncpy(game_opts_system, system, sizeof(game_opts_system) - 1);
+    game_opts_name[sizeof(game_opts_name)-1]     = '\0';
+    game_opts_path[sizeof(game_opts_path)-1]     = '\0';
+    game_opts_launch[sizeof(game_opts_launch)-1] = '\0';
+    game_opts_system[sizeof(game_opts_system)-1] = '\0';
+    game_opts_sel  = 0;
+    game_opts_mode = 0;
+    game_opts_back = back_state;
+    state = STATE_GAME_OPTIONS;
+    play_select();
+}
+
+static void draw_game_options(void) {
+    /* Render background state behind the overlay */
+    switch (game_opts_back) {
+    case STATE_GAMES:
+        draw_panel();
+        break;
+    case STATE_FAVORITES:
+        draw_entry_list("Favorites", favorite_entries, favorite_count,
+                        &favorite_sel, &favorite_offset, 1);
+        break;
+    case STATE_RECENT:
+        draw_entry_list("Recent", recent_entries, recent_count,
+                        &recent_sel, &recent_offset, 0);
+        break;
+    default:
+        draw_panel();
+        break;
+    }
+
+    /* Dim content behind the card */
+    fill_rect_alpha(0, 0, SCREEN_W, SCREEN_H, 140);
+
+    int cw  = 520;
+    int ch  = (game_opts_mode == 0) ? 300 : 340;
+    int cx  = (SCREEN_W - cw) / 2;
+    int cy  = (SCREEN_H - ch) / 2;
+    int pad = 20;
+    int inner_x = cx + pad;
+    int inner_w = cw - pad * 2;
+
+    draw_panel_asset(cx, cy, cw, ch);
+
+    /* Header band with game title */
+    fill_rrect(cx, cy, cw, 52, 4, C_SEL_BORDER);
+    char hdr[80];
+    strncpy(hdr, game_opts_name, sizeof(hdr) - 1);
+    hdr[sizeof(hdr)-1] = '\0';
+    while (strlen(hdr) > 4 && text_w(font_body, hdr) > inner_w - 8) {
+        hdr[strlen(hdr)-1] = '\0';
+    }
+    if (strlen(hdr) < strlen(game_opts_name) && strlen(hdr) > 3) {
+        hdr[strlen(hdr)-3] = '\0';
+        strcat(hdr, "...");
+    }
+    draw_text_center(font_body, hdr, cx, cw, cy + 16, SC_WHITE);
+
+    fill_rect(cx + 12, cy + 56, cw - 24, 1, C_SEP);
+
+    if (game_opts_mode == 0) {
+        /* ── Action menu ── */
+        draw_hint_base();
+        draw_hints_row("Select", "Back", NULL, NULL, NULL, NULL, NULL);
+
+        const char *items[GOPTS_COUNT];
+        items[GOPTS_LAUNCH]   = "Launch";
+        items[GOPTS_FAVORITE] = is_favorite(game_opts_path)
+                                ? "\xe2\x98\x85  Unfavorite"
+                                : "\xe2\x98\x86  Add to Favorites";
+        items[GOPTS_ROM_INFO]  = "ROM Info";
+        items[GOPTS_SAVE_INFO] = "Save Info";
+
+        int row_h = 52;
+        int ry = cy + 68;
+        for (int i = 0; i < GOPTS_COUNT; i++) {
+            int sel = (i == game_opts_sel);
+            if (sel) {
+                fill_rrect(inner_x - 6, ry + 4, inner_w + 12, row_h - 8,
+                           3, C_SEL_BORDER);
+                fill_rrect(inner_x - 5, ry + 5, inner_w + 10, row_h - 10,
+                           2, C_SEL_HI);
+            }
+            SDL_Color col = sel ? SC_WHITE : SC_TEXT;
+            draw_text(font_body, items[i], inner_x + 8, ry + (row_h - 22) / 2, col);
+            ry += row_h;
+        }
+
+    } else if (game_opts_mode == 1) {
+        /* ── ROM Info ── */
+        draw_hint_base();
+        draw_hints_row(NULL, "Back", NULL, NULL, NULL, NULL, NULL);
+
+        int row_h = 40;
+        int ry = cy + 68;
+
+        const char *slash = strrchr(game_opts_path, '/');
+        const char *fname = slash ? slash + 1 : game_opts_path;
+        draw_info_row(inner_x, ry, inner_w, "File", fname);
+        ry += row_h;
+
+        struct stat st;
+        if (stat(game_opts_path, &st) == 0) {
+            char sizebuf[32];
+            if (st.st_size >= 1024 * 1024)
+                snprintf(sizebuf, sizeof(sizebuf), "%.1f MB",
+                         (double)st.st_size / (1024.0 * 1024.0));
+            else
+                snprintf(sizebuf, sizeof(sizebuf), "%ld KB",
+                         (long)st.st_size / 1024);
+            draw_info_row(inner_x, ry, inner_w, "Size", sizebuf);
+            ry += row_h;
+
+            char tmbuf[32];
+            struct tm *tm_info = localtime(&st.st_mtime);
+            strftime(tmbuf, sizeof(tmbuf), "%Y-%m-%d", tm_info);
+            draw_info_row(inner_x, ry, inner_w, "Modified", tmbuf);
+            ry += row_h;
+        } else {
+            draw_info_row(inner_x, ry, inner_w, "Status", "File not found");
+            ry += row_h;
+        }
+
+        /* Truncated path */
+        char pathbuf[64];
+        int plen = strlen(game_opts_path);
+        if (plen > 48)
+            snprintf(pathbuf, sizeof(pathbuf), "...%s", game_opts_path + plen - 45);
+        else {
+            strncpy(pathbuf, game_opts_path, sizeof(pathbuf) - 1);
+            pathbuf[sizeof(pathbuf)-1] = '\0';
+        }
+        draw_info_row(inner_x, ry, inner_w, "Path", pathbuf);
+
+    } else {
+        /* ── Save Info ── */
+        draw_hint_base();
+        draw_hints_row(NULL, "Back", NULL, NULL, NULL, NULL, NULL);
+
+        int row_h = 40;
+        int ry = cy + 68;
+
+        char saves_dir[512];
+        snprintf(saves_dir, sizeof(saves_dir),
+                 POCKETOS_ROOT "/Saves/%s", game_opts_system);
+
+        const char *sl = strrchr(game_opts_path, '/');
+        char rombase[240];
+        strncpy(rombase, sl ? sl + 1 : game_opts_path, sizeof(rombase) - 1);
+        rombase[sizeof(rombase)-1] = '\0';
+        char *dot = strrchr(rombase, '.');
+        if (dot) *dot = '\0';
+
+        DIR *dp = opendir(saves_dir);
+        int found = 0;
+        if (dp) {
+            struct dirent *ent;
+            while ((ent = readdir(dp)) != NULL && found < 4) {
+                int rlen = strlen(rombase);
+                if (strncmp(ent->d_name, rombase, rlen) == 0 &&
+                    ent->d_name[rlen] != '\0' &&
+                    ent->d_name[0] != '.') {
+                    char save_path[600];
+                    snprintf(save_path, sizeof(save_path),
+                             "%s/%s", saves_dir, ent->d_name);
+                    struct stat st;
+                    if (stat(save_path, &st) == 0) {
+                        char tmbuf[32];
+                        struct tm *tm_info = localtime(&st.st_mtime);
+                        strftime(tmbuf, sizeof(tmbuf), "%Y-%m-%d %H:%M", tm_info);
+                        draw_info_row(inner_x, ry, inner_w, ent->d_name, tmbuf);
+                        ry += row_h;
+                        found++;
+                    }
+                }
+            }
+            closedir(dp);
+        }
+        if (!found) {
+            draw_text_center(font_body, "No saves found.", cx, cw,
+                             ry + 10, SC_DIM);
+        }
+    }
+}
+
+static void on_game_options_key(SDLKey k) {
+    if (game_opts_mode != 0) {
+        if (k == BTN_B || k == BTN_MENU) {
+            game_opts_mode = 0;
+            play_back();
+        }
+        return;
+    }
+    if (k == BTN_UP   && game_opts_sel > 0)             game_opts_sel--;
+    if (k == BTN_DOWN && game_opts_sel < GOPTS_COUNT-1) game_opts_sel++;
+    if (k == BTN_A) {
+        switch (game_opts_sel) {
+        case GOPTS_LAUNCH:
+            if (game_opts_back == STATE_GAMES) {
+                launch_game(sys_sel, game_sel);
+            } else {
+                PlayEntry tmp;
+                memset(&tmp, 0, sizeof(tmp));
+                strncpy(tmp.label,   game_opts_name,   sizeof(tmp.label)-1);
+                strncpy(tmp.rompath, game_opts_path,   sizeof(tmp.rompath)-1);
+                strncpy(tmp.launch,  game_opts_launch, sizeof(tmp.launch)-1);
+                strncpy(tmp.system,  game_opts_system, sizeof(tmp.system)-1);
+                launch_entry(&tmp);
+            }
+            break;
+        case GOPTS_FAVORITE:
+            toggle_favorite(game_opts_name, game_opts_path, game_opts_launch);
+            play_select();
+            break;
+        case GOPTS_ROM_INFO:
+            game_opts_mode = 1;
+            play_select();
+            break;
+        case GOPTS_SAVE_INFO:
+            game_opts_mode = 2;
+            play_select();
+            break;
+        }
+    }
+    if (k == BTN_B || k == BTN_MENU) {
+        play_back();
+        state = game_opts_back;
+        game_opts_mode = 0;
+    }
 }
 
 static void draw_info_panel(void) {
@@ -3092,7 +3402,7 @@ static void draw_settings(void) {
     draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Change", "Back", "L", "R", "Adjust", NULL);
+    draw_hints_row("Change", "Back", "L", "R", "Adjust", NULL, NULL);
 
     int clip_top    = CONTENT_Y;
     int clip_bottom = CONTENT_Y + CONTENT_H;
@@ -3249,6 +3559,9 @@ static void render(void) {
         draw_settings();   /* settings list behind the card */
         draw_info_panel();
         break;
+    case STATE_GAME_OPTIONS:
+        draw_game_options();
+        break;
     }
     draw_screenshot_toast();
     SDL_BlitSurface(screen, NULL, video, NULL);
@@ -3283,7 +3596,11 @@ static void on_home_key(SDLKey k) {
             state = STATE_SYSTEMS;
             break;
         case 3: // Browse
-            if (browse_genre_count == 0) load_browse_data();
+            if (browse_genre_count == 0) {
+                LogTimer _t = log_timer_begin("load_browse_data");
+                load_browse_data();
+                log_timer_end(_t);
+            }
             browse_genre_sel = 0; browse_genre_off = 0;
             state = STATE_BROWSE_CATS;
             break;
@@ -3301,7 +3618,7 @@ static void on_home_key(SDLKey k) {
 }
 
 static void on_entry_key(SDLKey k, PlayEntry *entries, int count, int *sel,
-                         int *offset) {
+                         int *offset, State back_state) {
     if (count <= 0) {
         if (k == BTN_B || k == BTN_LEFT || k == BTN_MENU) {
             play_back();
@@ -3316,6 +3633,10 @@ static void on_entry_key(SDLKey k, PlayEntry *entries, int count, int *sel,
     if (k == BTN_R1) *sel = (*sel + GAME_ROWS >= count) ? count - 1 : *sel + GAME_ROWS;
     if (*sel != before) play_move();
     if (k == BTN_A || k == BTN_RIGHT) launch_entry(&entries[*sel]);
+    if (k == BTN_X) {
+        PlayEntry *e = &entries[*sel];
+        enter_game_options(e->label, e->rompath, e->launch, e->system, back_state);
+    }
     if (k == BTN_B || k == BTN_LEFT || k == BTN_MENU) {
         play_back();
         state = STATE_HOME;
@@ -3349,7 +3670,7 @@ static void draw_font_picker(void) {
     draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Select", "Cancel", NULL, NULL, NULL, NULL);
+    draw_hints_row("Select", "Cancel", NULL, NULL, NULL, NULL, NULL);
 
     if (font_pick_sel < font_pick_offset) font_pick_offset = font_pick_sel;
     if (font_pick_sel >= font_pick_offset + HOME_VISIBLE) font_pick_offset = font_pick_sel - HOME_VISIBLE + 1;
@@ -3442,7 +3763,7 @@ static void draw_theme_picker(void) {
     draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Select", "Cancel", NULL, NULL, NULL, NULL);
+    draw_hints_row("Select", "Cancel", NULL, NULL, NULL, NULL, NULL);
 
     if (theme_pick_sel < theme_pick_offset) theme_pick_offset = theme_pick_sel;
     if (theme_pick_sel >= theme_pick_offset + HOME_VISIBLE)
@@ -3536,14 +3857,22 @@ static void on_settings_key(SDLKey k) {
         const char *kind = SETTINGS_ENTRIES[settings_sel].kind;
         if (kind && strcmp(kind, "font") == 0) {
             play_select();
-            if (font_list_count == 0) scan_fonts();
+            if (font_list_count == 0) {
+                LogTimer _t = log_timer_begin("scan_fonts (lazy)");
+                scan_fonts();
+                log_timer_end(_t);
+            }
             font_pick_prev = font_pick_sel;
             state = STATE_FONT_PICKER;
             return;
         }
         if (kind && strcmp(kind, "theme") == 0) {
             play_select();
-            if (theme_list_count == 0) scan_themes();
+            if (theme_list_count == 0) {
+                LogTimer _t = log_timer_begin("scan_themes (lazy)");
+                scan_themes();
+                log_timer_end(_t);
+            }
             state = STATE_THEME_PICKER;
             return;
         }
@@ -3627,6 +3956,13 @@ static void on_games_key(SDLKey k) {
         snprintf(launch, sizeof(launch), "%s/launch.sh", sys->emu_dir);
         toggle_favorite(g->name, g->path, launch);
         play_select();
+    }
+    if (k == BTN_X && game_count > 0) {
+        Game *g = &games[game_sel];
+        System *sys = &systems[sys_sel];
+        char launch[512];
+        snprintf(launch, sizeof(launch), "%s/launch.sh", sys->emu_dir);
+        enter_game_options(g->name, g->path, launch, sys->label, STATE_GAMES);
     }
     if (k == BTN_B || k == BTN_LEFT) {
         play_back();
@@ -3809,27 +4145,32 @@ int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
     log_open();
     log_msg("pocketOS main start");
+    LogTimer _t_startup = log_timer_begin("total startup");
     const char *autotest_env = getenv("POCKETOS_AUTOTEST_FRAMES");
     int autotest_frames = autotest_env ? atoi(autotest_env) : 0;
     int frames = 0;
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    { LogTimer _t = log_timer_begin("SDL_Init");
+      if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         log_sdl_error("SDL_Init");
         log_close();
         return 1;
-    }
+      }
+      log_timer_end(_t); }
     log_msg("SDL_Init OK");
     SDL_ShowCursor(SDL_DISABLE);
     SDL_EnableKeyRepeat(280, 60);
 
-    if (TTF_Init() != 0) {
-        log_sdl_error("TTF_Init");
-    } else {
-        log_msg("TTF_Init OK");
-    }
-    int img_flags = IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
-    log_kv("IMG_Init flags", (img_flags & IMG_INIT_PNG) ? "PNG+JPG" : "partial");
-    init_audio();
+    { LogTimer _t = log_timer_begin("TTF+IMG+audio init");
+      if (TTF_Init() != 0) {
+          log_sdl_error("TTF_Init");
+      } else {
+          log_msg("TTF_Init OK");
+      }
+      int img_flags = IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
+      log_kv("IMG_Init flags", (img_flags & IMG_INIT_PNG) ? "PNG+JPG" : "partial");
+      init_audio();
+      log_timer_end(_t); }
 
     video  = SDL_SetVideoMode(SCREEN_W, SCREEN_H, BPP, SDL_HWSURFACE | SDL_DOUBLEBUF);
     screen = SDL_CreateRGBSurface(SDL_HWSURFACE, SCREEN_W, SCREEN_H, BPP, 0, 0, 0, 0);
@@ -3856,26 +4197,30 @@ int main(int argc, char *argv[]) {
 
     // Check theme.json for a font override before loading fonts
     char theme_font[512] = "";
-    load_theme(theme_font, sizeof(theme_font));  // first pass: font only (colors need defaults first)
+    { LogTimer _t = log_timer_begin("load_theme (font pass)");
+      load_theme(theme_font, sizeof(theme_font));  // first pass: font only (colors need defaults first)
+      log_timer_end(_t); }
 
     // Load fonts: theme font → BPreplayBold → Exo → CJK fallback
-    const char *fp = theme_font[0] ? theme_font : FONT_PRIMARY;
-    font_body  = TTF_OpenFont(fp, 21);
-    font_game  = TTF_OpenFont(fp, 26);
-    font_large = TTF_OpenFont(fp, 29);
-    font_small = TTF_OpenFont(fp, 14);
-    if (!font_body)  font_body  = TTF_OpenFont(FONT_PRIMARY, 21);
-    if (!font_game)  font_game  = TTF_OpenFont(FONT_PRIMARY, 20);
-    if (!font_large) font_large = TTF_OpenFont(FONT_PRIMARY, 26);
-    if (!font_small) font_small = TTF_OpenFont(FONT_PRIMARY, 14);
-    if (!font_body)  font_body  = TTF_OpenFont(FONT_PATH, 21);
-    if (!font_game)  font_game  = TTF_OpenFont(FONT_PATH, 20);
-    if (!font_large) font_large = TTF_OpenFont(FONT_PATH, 26);
-    if (!font_small) font_small = TTF_OpenFont(FONT_PATH, 14);
-    if (!font_body)  font_body  = TTF_OpenFont(FONT_ALT, 21);
-    if (!font_game)  font_game  = TTF_OpenFont(FONT_ALT, 20);
-    if (!font_large) font_large = TTF_OpenFont(FONT_ALT, 26);
-    if (!font_small) font_small = TTF_OpenFont(FONT_ALT, 14);
+    { LogTimer _t = log_timer_begin("font load");
+      const char *fp = theme_font[0] ? theme_font : FONT_PRIMARY;
+      font_body  = TTF_OpenFont(fp, 21);
+      font_game  = TTF_OpenFont(fp, 26);
+      font_large = TTF_OpenFont(fp, 29);
+      font_small = TTF_OpenFont(fp, 14);
+      if (!font_body)  font_body  = TTF_OpenFont(FONT_PRIMARY, 21);
+      if (!font_game)  font_game  = TTF_OpenFont(FONT_PRIMARY, 20);
+      if (!font_large) font_large = TTF_OpenFont(FONT_PRIMARY, 26);
+      if (!font_small) font_small = TTF_OpenFont(FONT_PRIMARY, 14);
+      if (!font_body)  font_body  = TTF_OpenFont(FONT_PATH, 21);
+      if (!font_game)  font_game  = TTF_OpenFont(FONT_PATH, 20);
+      if (!font_large) font_large = TTF_OpenFont(FONT_PATH, 26);
+      if (!font_small) font_small = TTF_OpenFont(FONT_PATH, 14);
+      if (!font_body)  font_body  = TTF_OpenFont(FONT_ALT, 21);
+      if (!font_game)  font_game  = TTF_OpenFont(FONT_ALT, 20);
+      if (!font_large) font_large = TTF_OpenFont(FONT_ALT, 26);
+      if (!font_small) font_small = TTF_OpenFont(FONT_ALT, 14);
+      log_timer_end(_t); }
     if (!font_body || !font_game || !font_large || !font_small) {
         log_msg("ERROR: font load failed — no usable font found");
         log_file_state("font_path", FONT_PATH);
@@ -3902,9 +4247,20 @@ int main(int argc, char *argv[]) {
     // Apply theme color overrides (second pass — defaults are now set)
     load_theme(NULL, 0);
 
-    load_systems();
-    if (sys_count > 0) load_games(0);
-    scan_fonts();
+    { LogTimer _t = log_timer_begin("load_systems");
+      load_systems();
+      log_timer_end(_t); }
+    if (sys_count > 0) {
+        LogTimer _t = log_timer_begin("load_games(0)");
+        load_games(0);
+        log_timer_end(_t);
+    }
+    { LogTimer _t = log_timer_begin("scan_fonts");
+      scan_fonts();
+      log_timer_end(_t); }
+
+    log_timer_end(_t_startup);
+    log_msg("entering main loop");
 
     SDL_Event ev;
     while (running) {
@@ -3927,18 +4283,19 @@ int main(int argc, char *argv[]) {
                 case STATE_SYSTEMS: on_systems_key(k); break;
                 case STATE_GAMES:   on_games_key(k);   break;
                 case STATE_RECENT:
-                    on_entry_key(k, recent_entries, recent_count, &recent_sel, &recent_offset);
+                    on_entry_key(k, recent_entries, recent_count, &recent_sel, &recent_offset, STATE_RECENT);
                     break;
                 case STATE_FAVORITES:
-                    on_entry_key(k, favorite_entries, favorite_count, &favorite_sel, &favorite_offset);
+                    on_entry_key(k, favorite_entries, favorite_count, &favorite_sel, &favorite_offset, STATE_FAVORITES);
                     break;
                 case STATE_APPS:         on_apps_key(k);         break;
                 case STATE_SETTINGS:     on_settings_key(k);     break;
                 case STATE_FONT_PICKER:  on_font_picker_key(k);  break;
                 case STATE_THEME_PICKER: on_theme_picker_key(k); break;
-                case STATE_BROWSE_CATS:  on_browse_cats_key(k);  break;
-                case STATE_BROWSE_GAMES: on_browse_games_key(k); break;
-                case STATE_INFO_PANEL:   on_info_panel_key(k);   break;
+                case STATE_BROWSE_CATS:   on_browse_cats_key(k);   break;
+                case STATE_BROWSE_GAMES:  on_browse_games_key(k);  break;
+                case STATE_INFO_PANEL:    on_info_panel_key(k);    break;
+                case STATE_GAME_OPTIONS:  on_game_options_key(k);  break;
                 }
             }
         }
