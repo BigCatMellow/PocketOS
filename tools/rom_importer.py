@@ -408,14 +408,30 @@ class App(tk.Tk):
         downloads = Path.home() / "Downloads"
         if downloads.is_dir():
             self.src_var.set(str(downloads))
-        # Try common SD card mount points
-        for candidate in [
-            Path("/media/home/256 GB3"),
-            Path("/media") / os.getenv("USER", "") / "256 GB3",
-        ]:
-            if candidate.is_dir() and (candidate / "Roms").is_dir():
-                self.sd_var.set(str(candidate))
-                break
+        # Scan common mount roots for a Miyoo SD card
+        import sys as _sys
+        mount_roots = []
+        if _sys.platform == "win32":
+            import string
+            mount_roots = [Path(f"{c}:\\") for c in string.ascii_uppercase]
+        else:
+            for base in [Path("/media"), Path("/mnt"), Path("/Volumes")]:
+                if not base.exists():
+                    continue
+                try:
+                    for child in base.iterdir():
+                        mount_roots.append(child)
+                        if child.is_dir():
+                            mount_roots.extend(child.iterdir())
+                except PermissionError:
+                    pass
+        for candidate in mount_roots:
+            try:
+                if candidate.is_dir() and (candidate / "Roms").is_dir() and (candidate / ".tmp_update").is_dir():
+                    self.sd_var.set(str(candidate))
+                    break
+            except PermissionError:
+                pass
 
     def _pick_src(self):
         d = filedialog.askdirectory(title="Select ZIP source folder",
@@ -430,11 +446,12 @@ class App(tk.Tk):
             self.sd_var.set(d)
 
     def log(self, msg: str):
-        self.log_box.config(state="normal")
-        self.log_box.insert("end", msg + "\n")
-        self.log_box.see("end")
-        self.log_box.config(state="disabled")
-        self.update_idletasks()
+        def _do():
+            self.log_box.config(state="normal")
+            self.log_box.insert("end", msg + "\n")
+            self.log_box.see("end")
+            self.log_box.config(state="disabled")
+        self.after(0, _do)
 
     def _run(self):
         self.run_btn.config(state="disabled")

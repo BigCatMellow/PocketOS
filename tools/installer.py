@@ -821,8 +821,15 @@ class App(tk.Tk):
                 extract_dir = Path(tmp_dir) / "extracted"
                 with zipfile.ZipFile(zip_path) as zf:
                     zf.extractall(extract_dir)
+                # Handle ZIPs that wrap everything in a single top-level folder
+                src_dir = extract_dir
+                if not (src_dir / ".tmp_update").is_dir():
+                    for child in extract_dir.iterdir():
+                        if child.is_dir() and (child / ".tmp_update").is_dir():
+                            src_dir = child
+                            break
                 self._log_line(f"► Installing PocketOS {tag}...")
-                install_from_dir(extract_dir, sd, self._log_line)
+                install_from_dir(src_dir, sd, self._log_line)
                 self._log_line(f"\n✓ PocketOS {tag} installed!")
                 self.after(0, lambda: self._status.config(
                     text=f"✓ PocketOS {tag} installed! Eject safely, then power on."))

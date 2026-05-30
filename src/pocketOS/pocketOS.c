@@ -20,7 +20,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -773,21 +772,6 @@ static int read_battery(void) {
     return -1;
 }
 
-static void format_storage_value(char *out, int outlen) {
-    struct statvfs st;
-    if (statvfs(POCKETOS_ROOT, &st) != 0 || st.f_blocks == 0) {
-        snprintf(out, outlen, "--");
-        return;
-    }
-    unsigned long long free_mb = ((unsigned long long)st.f_bavail * st.f_frsize) / (1024ULL * 1024ULL);
-    unsigned long long total_mb = ((unsigned long long)st.f_blocks * st.f_frsize) / (1024ULL * 1024ULL);
-    if (total_mb >= 1024) {
-        snprintf(out, outlen, "%lluG free", free_mb / 1024ULL);
-    } else {
-        snprintf(out, outlen, "%lluM free", free_mb);
-    }
-}
-
 static void settings_value(const SettingsEntry *entry, char *out, int outlen) {
     const char *k = entry->kind;
     if (strcmp(k, "brightness") == 0) {
@@ -855,8 +839,6 @@ static void settings_value(const SettingsEntry *entry, char *out, int outlen) {
         snprintf(out, outlen, "%d%%", v);
     } else if (strcmp(k, "controls") == 0) {
         snprintf(out, outlen, "Default");
-    } else if (strcmp(k, "storage") == 0) {
-        format_storage_value(out, outlen);
     } else if (strcmp(k, "network") == 0) {
         int wifi = json_int_file(POCKETOS_ROOT "/system.json", "wifi", 0);
         snprintf(out, outlen, "%s", wifi ? "ON" : "OFF");
@@ -3964,7 +3946,9 @@ static void on_games_key(SDLKey k) {
         System *sys = &systems[sys_sel];
         char launch[512];
         snprintf(launch, sizeof(launch), "%s/launch.sh", sys->emu_dir);
-        enter_game_options(g->name, g->path, launch, sys->label, STATE_GAMES);
+        const char *sysbase = strrchr(sys->rom_dir, '/');
+        sysbase = sysbase ? sysbase + 1 : sys->rom_dir;
+        enter_game_options(g->name, g->path, launch, sysbase, STATE_GAMES);
     }
     if (k == BTN_B || k == BTN_LEFT) {
         play_back();
