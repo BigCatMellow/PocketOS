@@ -2971,14 +2971,16 @@ static void on_browse_games_key(SDLKey k) {
     if (k == BTN_A || k == BTN_RIGHT) {
         int gi = bg->start + browse_game_sel;
         BrowseGame *g = &browse_game_pool[gi];
-        /* Find the matching system to get its emu_dir / launch.sh */
+        /* Find the matching system by ROM folder name, not display label */
         System *sys = NULL;
         for (int si = 0; si < sys_count; si++) {
-            if (strcasecmp(systems[si].label, g->system) == 0) {
+            const char *rbase = strrchr(systems[si].rom_dir, '/');
+            rbase = rbase ? rbase + 1 : systems[si].rom_dir;
+            if (strcasecmp(rbase, g->system) == 0) {
                 sys = &systems[si]; break;
             }
         }
-        if (!sys) return;
+        if (!sys) { log_kv("browse launch: no system match for", g->system); return; }
         PlayEntry pe = {0};
         strncpy(pe.label,   g->title,  sizeof(pe.label)-1);
         strncpy(pe.rompath, g->path,   sizeof(pe.rompath)-1);
