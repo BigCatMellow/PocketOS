@@ -51,8 +51,17 @@ Requires Onion OS to be installed first. If you haven't set that up yet, grab it
 
 ## Install
 
-### GUI Installer (easiest)
-Download the installer for your platform, run it, point it at your SD card, done.
+### PocketOS Setup Suite (recommended)
+
+The installer is a full setup tool — it handles everything in one go:
+
+1. **Installs PocketOS** onto your SD card
+2. **Imports ROMs** from a folder you choose — unzips them and places each game in the correct system folder automatically
+3. **Cleans up bad dumps** — optionally removes inferior variants (bad dumps, overdumps, hacks, pirates) and keeps the best verified dump per game
+4. **Scans genres** using the OpenVGDB database so Browse by Genre works out of the box
+5. **Applies genre overrides** to fix common mis-tags
+
+Download the installer for your platform:
 
 | Platform | Download |
 |----------|---------|
@@ -60,19 +69,21 @@ Download the installer for your platform, run it, point it at your SD card, done
 | Windows | `PocketOS-Installer-windows.exe` |
 | macOS | `PocketOS-Installer-macos.tar.gz` — extract, then run `./PocketOS-Installer-macos` |
 
-The installer also checks for newer versions automatically.
+Point it at your SD card, optionally point it at a folder of ROM ZIPs, and click **Set Up PocketOS**. The installer also checks for newer versions automatically.
 
 ### Manual install
+
 Download `pocketOS-vX.X.zip` and extract it to the **root of your SD card**. The `.tmp_update` folder will merge with the existing one. Eject and boot.
 
 ### Uninstall
+
 Delete `.tmp_update/bin/pocketOS` from your SD card and reboot. The default Onion menu comes back.
 
 ---
 
 ## Browse by Genre
 
-PocketOS can filter your library by genre — it just needs a `miyoogamelist.xml` file in each system folder. The **Genre Scanner** tool handles this automatically by scanning your ROMs against a game database.
+PocketOS can filter your library by genre. The Setup Suite handles this automatically during install. If you want to re-scan genres separately, use the standalone **Genre Scanner**:
 
 | Platform | Download |
 |----------|---------|
@@ -80,7 +91,21 @@ PocketOS can filter your library by genre — it just needs a `miyoogamelist.xml
 | Windows | `PocketOS-GenreScanner-windows.exe` |
 | macOS | `PocketOS-GenreScanner-macos.tar.gz` — extract, then run `./PocketOS-GenreScanner-macos` |
 
-Point it at your SD card and it'll do the rest. The installer will also offer to launch it automatically after install.
+Point it at your SD card and it'll scan all your ROM folders and write `miyoogamelist.xml` files for each system.
+
+---
+
+## ROM Import
+
+The Setup Suite includes a standalone **ROM Importer** tool if you want to add games after initial setup:
+
+| Platform | Download |
+|----------|---------|
+| Linux | `PocketOS-ROMImporter-linux.tar.gz` — extract, then run `./PocketOS-ROMImporter-linux` |
+| Windows | `PocketOS-ROMImporter-windows.exe` |
+| macOS | `PocketOS-ROMImporter-macos.tar.gz` — extract, then run `./PocketOS-ROMImporter-macos` |
+
+It scans a folder for ZIP files, extracts the ROMs into the correct system folders on your SD card, optionally removes bad/duplicate dumps, and re-scans genres — the same pipeline the installer runs.
 
 ---
 
