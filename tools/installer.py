@@ -556,7 +556,7 @@ class App(tk.Tk):
         sd_row.pack(fill="x")
 
         # Path display (inset field)
-        sd_field = _bordered(sd_row, self.CREAM_IN, "#00000028", bd=2)
+        sd_field = _bordered(sd_row, self.CREAM_IN, "#c8bfaa", bd=2)
         sd_field.pack(side="left", fill="x", expand=True, ipady=8)
         self._sd_path_lbl = tk.Label(sd_field, textvariable=self._sd_path,
                                       fg=self.INK_SOFT, bg=self.CREAM_IN,
@@ -568,7 +568,7 @@ class App(tk.Tk):
                   bg=self.CREAM_ROW, fg=self.INK, activebackground=self.LAV_SOFT,
                   font=("Helvetica", 10, "bold"), relief="flat", bd=0,
                   padx=14, pady=10, cursor="hand2",
-                  highlightthickness=2, highlightbackground="#00000028"
+                  highlightthickness=2, highlightbackground="#c8bfaa"
                   ).pack(side="left", padx=(8, 0))
 
         # Detect label
@@ -621,7 +621,7 @@ class App(tk.Tk):
 
         # ROM folder row (shown when checkbox ticked)
         self._rom_row = tk.Frame(self._content, bg=self.CREAM)
-        rom_field = _bordered(self._rom_row, self.CREAM_IN, "#00000028", bd=2)
+        rom_field = _bordered(self._rom_row, self.CREAM_IN, "#c8bfaa", bd=2)
         rom_field.pack(side="left", fill="x", expand=True, ipady=8)
         self._rom_path_lbl = tk.Label(rom_field, textvariable=self._rom_src,
                                        fg=self.INK_SOFT, bg=self.CREAM_IN,
@@ -631,7 +631,7 @@ class App(tk.Tk):
                   bg=self.CREAM_ROW, fg=self.INK, activebackground=self.LAV_SOFT,
                   font=("Helvetica", 10, "bold"), relief="flat", bd=0,
                   padx=14, pady=10, cursor="hand2",
-                  highlightthickness=2, highlightbackground="#00000028"
+                  highlightthickness=2, highlightbackground="#c8bfaa"
                   ).pack(side="left", padx=(8, 0))
 
         self._clean_chk = tk.Checkbutton(
@@ -696,7 +696,7 @@ class App(tk.Tk):
                                   font=("Courier", 17))
         self._pct_lbl.pack(side="right")
 
-        seg_outer = _bordered(self._progress_wrap, self.CREAM_IN, "#00000030", bd=2,
+        seg_outer = _bordered(self._progress_wrap, self.CREAM_IN, "#c0b8a2", bd=2,
                                padx=4, pady=4)
         seg_outer.pack(fill="x")
         self._segbar = tk.Canvas(seg_outer, height=14, bg=self.CREAM_IN,
@@ -708,7 +708,7 @@ class App(tk.Tk):
         tk.Label(self._content, text="Progress log", fg=self.INK_SOFT, bg=self.CREAM,
                  font=("Helvetica", 8), anchor="w").pack(fill="x", pady=(12, 2))
 
-        console_wrap = _bordered(self._content, self.CREAM_IN, "#00000028", bd=2)
+        console_wrap = _bordered(self._content, self.CREAM_IN, "#c8bfaa", bd=2)
         console_wrap.pack(fill="x")
 
         self._console = tk.Text(
