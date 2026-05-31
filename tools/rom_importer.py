@@ -398,11 +398,15 @@ class App(tk.Tk):
         tk.Checkbutton(self, text="Remove duplicate/bad/hack variants (keep best dump per game)",
                        variable=self.clean_var).grid(row=3, column=0, columnspan=3, pady=(4, 0))
 
+        # Progress bar
+        self.progress = ttk.Progressbar(self, mode="indeterminate")
+        self.progress.grid(row=4, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 0))
+
         # Run button
         self.run_btn = tk.Button(self, text="Import ROMs", width=20,
                                  command=self._run, bg="#4FA85E", fg="white",
                                  font=(None, 11, "bold"))
-        self.run_btn.grid(row=4, column=0, columnspan=3, pady=10)
+        self.run_btn.grid(row=5, column=0, columnspan=3, pady=10)
 
     def _detect_defaults(self):
         downloads = Path.home() / "Downloads"
@@ -455,6 +459,7 @@ class App(tk.Tk):
 
     def _run(self):
         self.run_btn.config(state="disabled")
+        self.progress.start()
         threading.Thread(target=self._import_thread, daemon=True).start()
 
     def _import_thread(self):
@@ -463,7 +468,8 @@ class App(tk.Tk):
         except Exception as e:
             self.log(f"\nFATAL ERROR: {e}")
         finally:
-            self.run_btn.config(state="normal")
+            self.after(0, lambda: self.run_btn.config(state="normal"))
+            self.after(0, self.progress.stop)
 
     def _do_import(self):
         src  = Path(self.src_var.get().strip())

@@ -380,7 +380,6 @@ static AppEntry APP_ENTRIES[] = {
     { "Boot Logo",       "icon_theme.png",   "cd /mnt/SDCARD/App/EasyLogoTweak; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Calibration",     "app_display.png",  "cd /mnt/SDCARD/App/240pSuite; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Clock",           "app_clock.png",    "cd /mnt/SDCARD/App/Clock; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
-    { "Expert Mode",     "app_expert.png",   "cd /mnt/SDCARD/App/Expert_Mode; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Filter",          "app_search.png",   "cd /mnt/SDCARD/App/Filter; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Game Switcher",   "app_switcher.png", "cd /mnt/SDCARD/App/StartGameSwitcher; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Green Mode",      "icon_bluelight.png","cd /mnt/SDCARD/App/Green; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
@@ -393,7 +392,6 @@ static AppEntry APP_ENTRIES[] = {
     { "Random Game",     "app_random.png",   "cd /mnt/SDCARD/App/RandomGamePicker; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Reader",          "reader.png",       "cd /mnt/SDCARD/App/PixelReader; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "RetroArch",       "app_retroarch.png","cd /mnt/SDCARD/App/RetroArch; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
-    { "ROM Scripts",     "app_random.png",   "cd /mnt/SDCARD/App/romscripts; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Screenshots",     "screenshots.png",  "cd /mnt/SDCARD/App/Screenshots_Viewer; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Search",          "app_search.png",   "cd /mnt/SDCARD/App/Search; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Settings",        "settings.png",     "internal-settings" },
@@ -458,7 +456,7 @@ static int json_str(const char *filepath, const char *key, char *out, int outlen
     FILE *f = fopen(filepath, "r");
     if (!f) return 0;
 
-    char buf[4096];
+    char buf[8192];
     int n = (int)fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
     buf[n] = '\0';
@@ -511,7 +509,7 @@ static int json_int_file(const char *filepath, const char *key, int fallback) {
     FILE *f = fopen(filepath, "r");
     if (!f) return fallback;
 
-    char buf[4096];
+    char buf[8192];
     int n = (int)fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
     buf[n] = '\0';
@@ -3245,10 +3243,10 @@ static void on_game_options_key(SDLKey k) {
             } else {
                 PlayEntry tmp;
                 memset(&tmp, 0, sizeof(tmp));
-                strncpy(tmp.label,   game_opts_name,   sizeof(tmp.label)-1);
-                strncpy(tmp.rompath, game_opts_path,   sizeof(tmp.rompath)-1);
-                strncpy(tmp.launch,  game_opts_launch, sizeof(tmp.launch)-1);
-                strncpy(tmp.system,  game_opts_system, sizeof(tmp.system)-1);
+                snprintf(tmp.label,   sizeof(tmp.label),   "%s", game_opts_name);
+                snprintf(tmp.rompath, sizeof(tmp.rompath), "%s", game_opts_path);
+                snprintf(tmp.launch,  sizeof(tmp.launch),  "%s", game_opts_launch);
+                snprintf(tmp.system,  sizeof(tmp.system),  "%s", game_opts_system);
                 launch_entry(&tmp);
             }
             break;
@@ -3717,8 +3715,7 @@ static void scan_themes(void) {
         const char *ext = strrchr(n, '.');
         if (!ext || strcmp(ext, ".json") != 0) continue;
         snprintf(theme_list_path[theme_list_count], 512, "%s/%s", ASSET_ROOT, n);
-        strncpy(theme_list_name[theme_list_count], n, 63);
-        theme_list_name[theme_list_count][63] = '\0';
+        snprintf(theme_list_name[theme_list_count], sizeof(theme_list_name[0]), "%s", n);
         theme_list_count++;
     }
     closedir(d);
@@ -3987,10 +3984,8 @@ static void scan_fonts(void) {
             TTF_Font *probe = TTF_OpenFont(testpath, 26);
             if (!probe) continue;
             TTF_CloseFont(probe);
-            strncpy(font_list_path[font_list_count], testpath, 511);
-            font_list_path[font_list_count][511] = '\0';
-            strncpy(font_list_name[font_list_count], n, 63);
-            font_list_name[font_list_count][63] = '\0';
+            snprintf(font_list_path[font_list_count], sizeof(font_list_path[0]), "%s", testpath);
+            snprintf(font_list_name[font_list_count], sizeof(font_list_name[0]), "%s", n);
             font_list_count++;
         }
         closedir(dp);
