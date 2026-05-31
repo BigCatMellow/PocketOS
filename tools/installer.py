@@ -656,17 +656,21 @@ def _ensure_terminal():
     if sys.stdin.isatty():
         return
     import subprocess
-    exe = sys.argv[0]
-    terms = [
-        ["x-terminal-emulator", "-e"],
-        ["gnome-terminal", "--"],
-        ["xfce4-terminal", "-e"],
-        ["konsole", "-e"],
-        ["xterm", "-e"],
+    import shlex
+    exe = os.path.abspath(sys.argv[0])
+    quoted = shlex.quote(exe)
+    # bash -c wrapper keeps the window open after exit so the user can read output
+    bash_cmd = f"{quoted}; echo; read -p 'Press Enter to close...'"
+    attempts = [
+        ["gnome-terminal", "--", "bash", "-c", bash_cmd],
+        ["x-terminal-emulator", "-e", f"bash -c {shlex.quote(bash_cmd)}"],
+        ["xfce4-terminal", "-e", f"bash -c {shlex.quote(bash_cmd)}"],
+        ["konsole", "-e", "bash", "-c", bash_cmd],
+        ["xterm", "-e", "bash", "-c", bash_cmd],
     ]
-    for cmd in terms:
+    for cmd in attempts:
         try:
-            subprocess.Popen(cmd + [exe])
+            subprocess.Popen(cmd)
             sys.exit(0)
         except FileNotFoundError:
             continue
