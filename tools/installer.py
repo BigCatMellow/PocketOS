@@ -375,7 +375,295 @@ def _find_db() -> Path | None:
     return p if p.exists() else None
 
 
-# ── GUI ───────────────────────────────────────────────────────────────────────
+# ── pywebview app ─────────────────────────────────────────────────────────────
+
+import webview as _webview
+import json as _json
+
+
+class Api:
+    def __init__(self):
+        self._window = None
+
+    def set_window(self, w):
+        self._window = w
+
+    # ── JS bridge ──
+
+    def _js(self, expr):
+        try:
+            if self._window:
+                self._window.evaluate_js(expr)
+        except Exception:
+            pass
+
+    def _push_log(self, text, kind="info"):
+        self._js(f'window.__pushLog({_json.dumps(str(text))},"{kind}")')
+
+    def _push_pct(self, pct):
+        self._js(f'window.__pushPct({int(pct)})')
+
+    def _push_phase(self, phase):
+        self._js(f'window.__setPhase("{phase}")')
+
+    def _log(self, text):
+        t = text.strip()
+        kind = ("ok"   if t.startswith("✓") else
+                "err"  if t.startswith("✗") or "ERROR" in text else
+                "done" if "complete" in text.lower() or "setup complete" in text.lower() else
+                "info")
+        self._push_log(text, kind)
+
+    # ── API methods called from JS ──
+
+    def auto_detect(self):
+        candidates = []
+        if sys.platform == "win32":
+            import string
+            for letter in string.ascii_uppercase:
+                p = Path(f"{letter}:\\")
+                if p.exists() and detect_sd(p):
+                    candidates.append({"path": str(p), "name": f"{letter}:\\"})
+        else:
+            for mount in [Path("/media"), Path("/mnt"), Path("/Volumes")]:
+                if not mount.exists():
+                    continue
+                try:
+                    for child in mount.iterdir():
+                        if detect_sd(child):
+                            candidates.append({"path": str(child), "name": child.name})
+                        for gc in (child.iterdir() if child.is_dir() else []):
+                            if detect_sd(gc):
+                                candidates.append({"path": str(gc), "name": gc.name})
+                except PermissionError:
+                    pass
+        return candidates
+
+    def validate_path(self, path):
+        p = Path(path)
+        if not p.is_dir():
+            return {"valid": False, "onion": False, "name": ""}
+        return {
+            "valid": detect_sd(p),
+            "onion": detect_onion(p),
+            "name":  p.name or str(p),
+        }
+
+    def browse_sd(self):
+        result = self._window.create_file_dialog(_webview.FOLDER_DIALOG)
+        return result[0] if result else None
+
+    def browse_roms(self):
+        result = self._window.create_file_dialog(_webview.FOLDER_DIALOG)
+        return result[0] if result else None
+
+    def start_install(self, sd_path, rom_src, do_import, do_clean):
+        if not PAYLOAD_BIN.exists():
+            self._push_log(
+                f"✗ PocketOS payload not found: {PAYLOAD_BIN}\n"
+                "Try re-downloading from the releases page.", "err")
+            self._push_phase("error")
+            return
+
+        def _run():
+            try:
+                self._run_setup(
+                    Path(sd_path),
+                    Path(rom_src) if do_import and rom_src else None,
+                    do_clean)
+            except Exception as e:
+                self._push_log(f"✗ ERROR: {e}", "err")
+                self._push_phase("error")
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _run_setup(self, sd, rom_src, do_clean):
+        roms_root = sd / "Roms"
+
+        self._push_log("── Phase 1: Installing PocketOS ──")
+        self._push_pct(10)
+        install(sd, self._log)
+        self._push_log("✓ PocketOS installed\n", "ok")
+        self._push_pct(35)
+
+        affected_systems: set = set()
+        if rom_src and rom_src.is_dir():
+            self._push_log("── Phase 2: Importing ROMs ──")
+            zips = sorted(rom_src.glob("*.zip"))
+            self._push_log(f"  Found {len(zips)} ZIP(s) in {rom_src}")
+            extracted_total = skipped = 0
+            for i, zip_path in enumerate(zips):
+                ext, candidates = detect_system(zip_path)
+                if not candidates:
+                    self._push_log(f"  [?] {zip_path.name} — unrecognised, skipping")
+                    skipped += 1
+                    continue
+                dest_folder = find_system_folder(roms_root, candidates)
+                if dest_folder is None:
+                    dest_folder = roms_root / candidates[0]
+                    dest_folder.mkdir(parents=True, exist_ok=True)
+                self._push_log(f"  [{dest_folder.name}] {zip_path.name}")
+                new_files = extract_zip(zip_path, dest_folder, self._log)
+                extracted_total += len(new_files)
+                if new_files:
+                    affected_systems.add(dest_folder.name)
+                self._push_pct(35 + int(35 * (i + 1) / max(len(zips), 1)))
+            self._push_log(f"  Extracted {extracted_total} file(s), {skipped} unrecognised skipped")
+
+            if do_clean and affected_systems:
+                self._push_log("── Phase 2b: Removing duplicate/bad dumps ──")
+                total_removed = 0
+                for sys_folder in sorted(affected_systems):
+                    removed = clean_variants(roms_root / sys_folder, self._log)
+                    if removed:
+                        self._push_log(f"  {sys_folder}: removed {removed} variant(s)")
+                        total_removed += removed
+                self._push_log(f"  Total removed: {total_removed}")
+        else:
+            self._push_log("── Phase 2: ROM import skipped ──")
+            if roms_root.is_dir():
+                for d in roms_root.iterdir():
+                    if d.is_dir():
+                        has_roms = any(
+                            f.suffix.lower() in ROM_EXTS
+                            for f in d.iterdir() if f.is_file())
+                        if has_roms and not (d / "miyoogamelist.xml").exists():
+                            affected_systems.add(d.name)
+
+        self._push_pct(70)
+
+        db_path   = _find_db()
+        overrides = _load_overrides()
+        if not affected_systems:
+            self._push_log("── Phase 3: Genre scan skipped (no new ROMs) ──")
+        elif not db_path:
+            self._push_log("── Phase 3: Genre scan skipped (openvgdb.sqlite not found) ──")
+        else:
+            self._push_log("── Phase 3: Scanning genres ──")
+            total_added = 0
+            for i, sys_folder in enumerate(sorted(affected_systems)):
+                added = scan_genres_for_system(roms_root, sys_folder, db_path, self._log)
+                if added:
+                    self._push_log(f"  {sys_folder}: added {added} genre entry/entries")
+                    total_added += added
+                self._push_pct(70 + int(25 * (i + 1) / max(len(affected_systems), 1)))
+            self._push_log(f"  Total genre entries added: {total_added}")
+
+            if overrides:
+                self._push_log("── Phase 3b: Applying manual genre overrides ──")
+                total_fixed = 0
+                for sys_folder in sorted(affected_systems):
+                    fixed = apply_overrides(roms_root, sys_folder, overrides, self._log)
+                    if fixed:
+                        self._push_log(f"  {sys_folder}: fixed {fixed} override(s)")
+                        total_fixed += fixed
+                self._push_log(f"  Total overrides applied: {total_fixed}")
+
+        self._push_pct(99)
+        self._push_log("\n✓ Setup complete.", "done")
+        self._push_log("  Eject your SD card safely, insert into your Miyoo Mini Plus, and power on.")
+        self._push_log("  PocketOS launches automatically.")
+        self._push_pct(100)
+        self._push_phase("success")
+
+    def start_uninstall(self, sd_path):
+        def _run():
+            try:
+                self._push_pct(30)
+                uninstall(Path(sd_path), self._log)
+                self._push_pct(80)
+                self._push_log("✓ PocketOS removed. Eject your SD card safely.", "done")
+                self._push_pct(100)
+                self._push_phase("removed")
+            except Exception as e:
+                self._push_log(f"✗ ERROR: {e}", "err")
+                self._push_phase("error")
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def check_update(self):
+        def _run():
+            tag, url = fetch_latest_release()
+            if not tag or not url:
+                return
+            try:
+                if version_tuple(tag) > version_tuple(VERSION):
+                    self._js(f'window.__showUpdate({_json.dumps(tag)},{_json.dumps(url)})')
+            except Exception:
+                pass
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def download_update(self, tag, url):
+        def _run():
+            tmp_dir = None
+            try:
+                self._push_log(f"► Downloading PocketOS {tag} from GitHub…")
+                tmp_dir = tempfile.mkdtemp(prefix="pocketos_")
+                zip_path = Path(tmp_dir) / f"pocketOS-{tag}.zip"
+
+                def _progress(count, block, total):
+                    if total > 0:
+                        self._push_pct(min(90, count * block * 100 // total))
+
+                urllib.request.urlretrieve(url, zip_path, reporthook=_progress)
+                self._push_log("► Extracting…")
+                extract_dir = Path(tmp_dir) / "extracted"
+                with zipfile.ZipFile(zip_path) as zf:
+                    zf.extractall(extract_dir)
+                src_dir = extract_dir
+                if not (src_dir / ".tmp_update").is_dir():
+                    for child in extract_dir.iterdir():
+                        if child.is_dir() and (child / ".tmp_update").is_dir():
+                            src_dir = child
+                            break
+                sd_path = self._window.evaluate_js("window.__getSdPath()")
+                if not sd_path:
+                    raise RuntimeError("No SD card selected")
+                self._push_log(f"► Installing PocketOS {tag}…")
+                install_from_dir(src_dir, Path(sd_path), self._log)
+                self._push_log(f"✓ PocketOS {tag} installed!", "done")
+                self._push_pct(100)
+                self._push_phase("success")
+                self._js("window.__showUpdate(null,null)")
+            except Exception as e:
+                self._push_log(f"✗ ERROR: {e}", "err")
+                self._push_phase("error")
+            finally:
+                if tmp_dir:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def open_url(self, url):
+        webbrowser.open(url)
+
+
+def main():
+    if getattr(sys, "frozen", False):
+        ui_dir = Path(sys._MEIPASS) / "ui"
+    else:
+        ui_dir = Path(__file__).parent / "ui"
+
+    api = Api()
+    window = _webview.create_window(
+        "PocketOS Installer",
+        url=str(ui_dir / "index.html"),
+        js_api=api,
+        width=580,
+        height=880,
+        resizable=False,
+        background_color="#121929",
+    )
+    api.set_window(window)
+    _webview.start()
+
+
+if __name__ == "__main__":
+    main()
+
+
+# ── legacy tkinter stubs (kept so old imports don't break) ────────────────────
 
 def _bordered(parent, bg, border_color, bd=2, **kw):
     """Frame with a flat color border (using highlightthickness)."""
