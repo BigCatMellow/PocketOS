@@ -651,5 +651,27 @@ class Installer:
         print()
 
 
+def _ensure_terminal():
+    """If not running in a terminal (e.g. double-clicked), relaunch inside one."""
+    if sys.stdin.isatty():
+        return
+    import subprocess
+    exe = sys.argv[0]
+    terms = [
+        ["x-terminal-emulator", "-e"],
+        ["gnome-terminal", "--"],
+        ["xfce4-terminal", "-e"],
+        ["konsole", "-e"],
+        ["xterm", "-e"],
+    ]
+    for cmd in terms:
+        try:
+            subprocess.Popen(cmd + [exe])
+            sys.exit(0)
+        except FileNotFoundError:
+            continue
+
+
 if __name__ == "__main__":
+    _ensure_terminal()
     Installer().run()
