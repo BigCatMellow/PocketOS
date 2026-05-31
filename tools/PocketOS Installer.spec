@@ -4,7 +4,9 @@
 a = Analysis(
     ['installer.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        ('/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0', '.'),
+    ],
     datas=[
         ('../release/pocketOS-v1.0/.tmp_update/bin/pocketOS', '.tmp_update/bin'),
         ('../release/pocketOS-v1.0/.tmp_update/res/pocketos', '.tmp_update/res/pocketos'),
