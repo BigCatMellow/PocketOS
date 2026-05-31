@@ -23,7 +23,7 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, filedialog, scrolledtext, messagebox
+from tkinter import ttk, filedialog, messagebox
 
 # ── Bundled assets path ───────────────────────────────────────────────────────
 if getattr(sys, "frozen", False):
@@ -377,18 +377,50 @@ def _find_db() -> Path | None:
 
 # ── GUI ───────────────────────────────────────────────────────────────────────
 
+def _bordered(parent, bg, border_color, bd=2, **kw):
+    """Frame with a flat color border (using highlightthickness)."""
+    return tk.Frame(parent, bg=bg,
+                    highlightthickness=bd, highlightbackground=border_color, **kw)
+
+def _pill_label(parent, text, bg, fg, font):
+    """Small rounded-look label (just a Label with padding — closest tkinter gets)."""
+    return tk.Label(parent, text=text, bg=bg, fg=fg, font=font, padx=7, pady=2)
+
+
 class App(tk.Tk):
+    # ── Design tokens (from index.html) ────────────────────────────────────────
+    NAVY      = "#0d1a2e"
+    NAVY2     = "#13243f"
+    CREAM     = "#efe7d8"
+    CREAM_ROW = "#f6f1e7"
+    CREAM_IN  = "#e7decb"
+    INK       = "#16233f"
+    INK_SOFT  = "#6c7591"
+    LAV       = "#d4ccf6"
+    LAV_SOFT  = "#e4dffa"
+    LAV_BRD   = "#9a89dc"
+    LAV_DEEP  = "#7b69cf"
+    LAV_SHD   = "#5d4caf"
+    LIME      = "#82ea5f"
+    LIME_DP   = "#4fb733"
+    RED       = "#ea5440"
+    RED_DP    = "#b6392a"
+    AMBER     = "#f0b43c"
+
+    SEG_COUNT = 22
+
     def __init__(self):
         super().__init__()
-        self.title(f"PocketOS Setup {VERSION}")
+        self.title("PocketOS Installer")
         self.resizable(False, False)
-        self.configure(bg="#1e1e2e")
-        self._sd_path    = tk.StringVar()
-        self._rom_src    = tk.StringVar()
-        self._import_on  = tk.BooleanVar(value=False)
-        self._clean_on   = tk.BooleanVar(value=True)
+        self._sd_path   = tk.StringVar()
+        self._rom_src   = tk.StringVar()
+        self._import_on = tk.BooleanVar(value=False)
+        self._clean_on  = tk.BooleanVar(value=True)
         self._latest_tag = None
         self._latest_url = None
+        self._phase = "idle"   # idle|ready|installing|success|confirm|uninstalling|removed|error
+        self._pct   = 0
         self._build_ui()
         self._center()
         self._auto_detect()
@@ -397,165 +429,580 @@ class App(tk.Tk):
     def _center(self):
         self.update_idletasks()
         w, h = self.winfo_width(), self.winfo_height()
-        self.geometry(f"+{(self.winfo_screenwidth()-w)//2}+{(self.winfo_screenheight()-h)//2}")
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # UI construction
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        PAD = 16
-        FG  = "#cdd6f4"
-        BG  = "#1e1e2e"
-        ENT = "#313244"
-        ACC = "#89b4fa"
-        BTN = "#45475a"
-        RED = "#f38ba8"
-        SUB = "#a6adc8"
-        DIM = "#6c7086"
-        GRN = "#a6e3a1"
+        self.configure(bg=self.CREAM)
 
-        # Logo
-        LOGO = (
-            r" ____             _        _    ___  ____  " + "\n"
-            r"|  _ \ ___   ___ | | _____| |_ / _ \/ ___| " + "\n"
-            r"| |_) / _ \ / __|| |/ / _ \ __| | | \___ \ " + "\n"
-            r"|  __/ (_) | (__ |   <  __/ |_| |_| |___) |" + "\n"
-            r"|_|   \___/ \___||_|\_\___|\__|\___/|____/ " + "\n"
-            f"                         Setup  {VERSION}  "
-        )
-        tk.Label(self, text=LOGO, font=("Courier", 9, "bold"),
-                 fg=ACC, bg=BG, justify="center").pack(pady=(PAD, 4))
-        tk.Label(self,
-                 text="A minimal launcher for the Miyoo Mini Plus  ·  Built on Onion OS",
-                 font=("Helvetica", 9), fg=DIM, bg=BG, justify="center").pack(pady=(0, 8))
-
-        # Update banner
-        self._update_frame = tk.Frame(self, bg="#1e3a5f", padx=PAD, pady=8)
-        self._update_lbl   = tk.Label(self._update_frame, text="", fg="#89dceb",
-                                       bg="#1e3a5f", font=("Helvetica", 9), anchor="w", justify="left")
-        self._update_lbl.pack(side="left", fill="x", expand=True)
-        self._update_btn = tk.Button(self._update_frame, text="",
-                                      command=self._do_update_install,
-                                      bg=BTN, fg=GRN, relief="flat",
-                                      padx=8, cursor="hand2", font=("Helvetica", 9, "bold"))
-        self._update_btn.pack(side="right")
-        self._update_frame.pack_forget()
-
-        ttk.Separator(self, orient="horizontal").pack(fill="x", padx=PAD)
-
-        # ── Step 1: SD card ───────────────────────────────────────────────────
-        f1 = tk.Frame(self, bg=BG, padx=PAD, pady=10)
-        f1.pack(fill="x")
-        tk.Label(f1, text="Step 1 — Select your SD card",
-                 fg=FG, bg=BG, font=("Helvetica", 10, "bold"), anchor="w").pack(fill="x")
-        tk.Label(f1, text="The root of the card — contains Roms/ and BIOS/.",
-                 fg=DIM, bg=BG, font=("Helvetica", 9), anchor="w").pack(fill="x", pady=(2, 4))
-        row = tk.Frame(f1, bg=BG)
-        row.pack(fill="x")
-        self._sd_entry = tk.Entry(row, textvariable=self._sd_path, width=52,
-                                   bg=ENT, fg=FG, insertbackground=FG, relief="flat",
-                                   font=("Helvetica", 10))
-        self._sd_entry.pack(side="left", fill="x", expand=True, ipady=4)
-        tk.Button(row, text="Browse…", command=self._browse_sd,
-                  bg=BTN, fg=FG, relief="flat", padx=10, cursor="hand2").pack(side="left", padx=(6, 0))
-        self._detect_lbl = tk.Label(f1, text="", fg=SUB, bg=BG, font=("Helvetica", 9))
-        self._detect_lbl.pack(anchor="w", pady=(4, 0))
-
-        # Onion warning
-        self._onion_frame = tk.Frame(self, bg="#313244", padx=PAD, pady=8)
-        self._onion_lbl   = tk.Label(self._onion_frame, text="", fg="#fab387", bg="#313244",
-                                      font=("Helvetica", 9), justify="left", anchor="w", wraplength=400)
-        self._onion_lbl.pack(side="left", fill="x", expand=True)
-        tk.Button(self._onion_frame, text="Get Onion OS →",
-                  command=lambda: webbrowser.open(ONION_URL),
-                  bg=BTN, fg=ACC, relief="flat", padx=8, cursor="hand2",
-                  font=("Helvetica", 9)).pack(side="right")
-        self._onion_frame.pack_forget()
-
-        ttk.Separator(self, orient="horizontal").pack(fill="x", padx=PAD)
-
-        # ── Step 2: ROM import (optional) ─────────────────────────────────────
-        f2 = tk.Frame(self, bg=BG, padx=PAD, pady=10)
-        f2.pack(fill="x")
-        tk.Label(f2, text="Step 2 — Import ROMs  (optional)",
-                 fg=FG, bg=BG, font=("Helvetica", 10, "bold"), anchor="w").pack(fill="x")
-        tk.Label(f2,
-                 text="Point to a folder of ZIP files. PocketOS will detect each system automatically,\n"
-                      "extract the ROMs, scan genres, and set up Browse by Genre.",
-                 fg=DIM, bg=BG, font=("Helvetica", 9), anchor="w", justify="left").pack(fill="x", pady=(2, 6))
-
-        chk_row = tk.Frame(f2, bg=BG)
-        chk_row.pack(fill="x")
-        tk.Checkbutton(chk_row, text="Import ROMs from folder",
-                       variable=self._import_on, command=self._toggle_import,
-                       fg=FG, bg=BG, selectcolor=ENT, activebackground=BG,
-                       font=("Helvetica", 9)).pack(side="left")
-
-        self._rom_row = tk.Frame(f2, bg=BG)
-        self._rom_entry = tk.Entry(self._rom_row, textvariable=self._rom_src, width=44,
-                                    bg=ENT, fg=FG, insertbackground=FG, relief="flat",
-                                    font=("Helvetica", 10))
-        self._rom_entry.pack(side="left", fill="x", expand=True, ipady=4)
-        tk.Button(self._rom_row, text="Browse…", command=self._browse_roms,
-                  bg=BTN, fg=FG, relief="flat", padx=10, cursor="hand2").pack(side="left", padx=(6, 0))
-
-        self._clean_chk = tk.Checkbutton(f2,
-                          text="Remove duplicate/bad/hacked dumps — keep the best version of each game",
-                          variable=self._clean_on,
-                          fg=SUB, bg=BG, selectcolor=ENT, activebackground=BG,
-                          font=("Helvetica", 9))
-
-        ttk.Separator(self, orient="horizontal").pack(fill="x", padx=PAD)
-
-        # ── Step 3: Action buttons ────────────────────────────────────────────
-        f3 = tk.Frame(self, bg=BG, padx=PAD, pady=12)
-        f3.pack(fill="x")
-        tk.Label(f3, text="Step 3 — Run setup",
-                 fg=FG, bg=BG, font=("Helvetica", 10, "bold"), anchor="w").pack(fill="x", pady=(0, 8))
-
-        btn_row = tk.Frame(f3, bg=BG)
-        btn_row.pack(fill="x")
-        self._setup_btn = tk.Button(btn_row, text="▶  Set Up PocketOS",
-                                     command=self._do_setup,
-                                     bg=ACC, fg="#1e1e2e",
-                                     font=("Helvetica", 12, "bold"),
-                                     relief="flat", padx=16, pady=10, cursor="hand2")
-        self._setup_btn.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        self._remove_btn = tk.Button(btn_row, text="Remove",
-                                      command=self._do_uninstall,
-                                      bg=BTN, fg=RED,
-                                      font=("Helvetica", 11),
-                                      relief="flat", padx=16, pady=10, cursor="hand2")
-        self._remove_btn.pack(side="left")
-
-        tk.Label(f3,
-                 text="Set Up PocketOS: installs the launcher, imports ROMs (if selected), scans genres.\n"
-                      "Remove: uninstalls PocketOS and returns the default Onion menu.",
-                 fg=DIM, bg=BG, font=("Helvetica", 8), anchor="w", justify="left").pack(fill="x", pady=(4, 0))
-
-        # Progress + log
-        self._progress = ttk.Progressbar(self, mode="indeterminate")
-        self._progress.pack(fill="x", padx=PAD, pady=(4, 2))
-        tk.Label(self, text="Progress log", fg=DIM, bg=BG,
-                 font=("Helvetica", 8), anchor="w", padx=PAD).pack(fill="x")
-        self._log = scrolledtext.ScrolledText(self, height=12, width=68,
-                                               bg="#181825", fg=FG,
-                                               font=("Courier", 9), relief="flat",
-                                               state="disabled")
-        self._log.pack(padx=PAD, pady=(2, PAD), fill="both")
-
-        self._status = tk.Label(self,
-                                 text="Insert your SD card and select it above to get started.",
-                                 fg=SUB, bg="#181825", font=("Helvetica", 9),
-                                 anchor="w", padx=8)
-        self._status.pack(fill="x", side="bottom")
+        self._build_titlebar()
+        self._build_update_banner()
+        self._build_hero()
+        self._build_content()
+        self._build_footer()
 
         self._sd_path.trace_add("write", lambda *_: self._validate())
         self._toggle_import()
+        self._set_phase("idle")
 
-    # ── Toggle ROM import section ─────────────────────────────────────────────
+    # ── Title bar ─────────────────────────────────────────────────────────────
+
+    def _build_titlebar(self):
+        bar = tk.Frame(self, bg=self.NAVY, height=40)
+        bar.pack(fill="x")
+        bar.pack_propagate(False)
+
+        # Logo glyph
+        tk.Label(bar, text="◈", fg=self.LAV, bg=self.NAVY,
+                 font=("Helvetica", 13)).pack(side="left", padx=(10, 4))
+
+        tk.Label(bar, text="PocketOS Installer", fg="#eaf1ff", bg=self.NAVY,
+                 font=("Helvetica", 11, "bold")).pack(side="left")
+        tk.Label(bar, text="  " + VERSION, fg="#7e8db0", bg=self.NAVY,
+                 font=("Courier", 12)).pack(side="left")
+
+        # Close / reset button
+        tk.Button(bar, text="✕", bg="#b8382c", fg="white",
+                  activebackground="#e1483a", activeforeground="white",
+                  font=("Helvetica", 11, "bold"), relief="flat", bd=0,
+                  padx=8, cursor="hand2", command=self._reset
+                  ).pack(side="right", padx=(0, 6), pady=6)
+
+        # Status pill (hidden until card selected)
+        self._pill_var = tk.StringVar()
+        self._pill_lbl = tk.Label(bar, textvariable=self._pill_var,
+                                   bg=self.NAVY2, fg=self.LIME,
+                                   font=("Courier", 12, "bold"), padx=9, pady=3,
+                                   relief="flat")
+        self._pill_lbl.pack(side="right", padx=(0, 8), pady=8)
+        self._pill_lbl.pack_forget()
+
+    def _set_pill(self, text: str, fg: str):
+        if text:
+            self._pill_var.set("  " + text + "  ")
+            self._pill_lbl.config(fg=fg)
+            self._pill_lbl.pack(side="right", padx=(0, 8), pady=8)
+        else:
+            self._pill_lbl.pack_forget()
+
+    # ── Update banner ─────────────────────────────────────────────────────────
+
+    def _build_update_banner(self):
+        self._update_frame = tk.Frame(self, bg="#1e3a5f", padx=16, pady=7)
+        self._update_lbl   = tk.Label(self._update_frame, text="", fg="#89dceb",
+                                       bg="#1e3a5f", font=("Helvetica", 9), anchor="w")
+        self._update_lbl.pack(side="left", fill="x", expand=True)
+        self._update_btn = tk.Button(self._update_frame, text="",
+                                      command=self._do_update_install,
+                                      bg="#2a3e5a", fg="#a6e3a1", relief="flat",
+                                      padx=10, cursor="hand2",
+                                      font=("Helvetica", 9, "bold"))
+        self._update_btn.pack(side="right")
+        self._update_frame.pack_forget()
+
+    # ── Hero ──────────────────────────────────────────────────────────────────
+
+    def _build_hero(self):
+        hero = tk.Frame(self, bg=self.CREAM)
+        hero.pack(fill="x", pady=(20, 10))
+
+        wm = tk.Frame(hero, bg=self.CREAM)
+        wm.pack()
+        tk.Label(wm, text="Pocket", fg=self.INK, bg=self.CREAM,
+                 font=("Helvetica", 40, "bold")).pack(side="left")
+        tk.Label(wm, text="OS", fg=self.LAV_DEEP, bg=self.CREAM,
+                 font=("Helvetica", 40, "bold")).pack(side="left")
+
+        tk.Label(hero, text=f"Installer  ·  {VERSION}",
+                 fg=self.INK_SOFT, bg=self.CREAM,
+                 font=("Helvetica", 11, "bold")).pack(pady=(2, 0))
+        tk.Label(hero,
+                 text="A minimal launcher for the Miyoo Mini Plus  ·  Built on Onion OS",
+                 fg=self.INK_SOFT, bg=self.CREAM, font=("Helvetica", 9)).pack(pady=(3, 0))
+
+    # ── Content ───────────────────────────────────────────────────────────────
+
+    def _build_content(self):
+        PAD = 22
+        self._content = tk.Frame(self, bg=self.CREAM, padx=PAD)
+        self._content.pack(fill="x")
+
+        self._build_sd_section()
+        self._build_onion_warning()
+        self._build_rom_import()
+        self._build_actions()
+        self._build_progress()
+        self._build_console()
+        tk.Frame(self._content, height=14, bg=self.CREAM).pack()
+
+    def _field_label(self, parent, text, hint=""):
+        row = tk.Frame(parent, bg=self.CREAM)
+        row.pack(fill="x", pady=(10, 6))
+        tk.Label(row, text=text, fg=self.INK, bg=self.CREAM,
+                 font=("Helvetica", 10, "bold")).pack(side="left")
+        if hint:
+            tk.Label(row, text="  " + hint, fg=self.INK_SOFT, bg=self.CREAM,
+                     font=("Helvetica", 9)).pack(side="left")
+
+    def _build_sd_section(self):
+        self._field_label(self._content, "SD CARD",
+                          "select the root of your Miyoo SD card")
+
+        sd_row = tk.Frame(self._content, bg=self.CREAM)
+        sd_row.pack(fill="x")
+
+        # Path display (inset field)
+        sd_field = _bordered(sd_row, self.CREAM_IN, "#00000028", bd=2)
+        sd_field.pack(side="left", fill="x", expand=True, ipady=8)
+        self._sd_path_lbl = tk.Label(sd_field, textvariable=self._sd_path,
+                                      fg=self.INK_SOFT, bg=self.CREAM_IN,
+                                      font=("Courier", 13), anchor="w",
+                                      padx=10, pady=2)
+        self._sd_path_lbl.pack(fill="x")
+
+        tk.Button(sd_row, text="Browse…", command=self._browse_sd,
+                  bg=self.CREAM_ROW, fg=self.INK, activebackground=self.LAV_SOFT,
+                  font=("Helvetica", 10, "bold"), relief="flat", bd=0,
+                  padx=14, pady=10, cursor="hand2",
+                  highlightthickness=2, highlightbackground="#00000028"
+                  ).pack(side="left", padx=(8, 0))
+
+        # Detect label
+        self._detect_lbl = tk.Label(self._content, text="", fg=self.INK_SOFT,
+                                     bg=self.CREAM, font=("Helvetica", 9))
+        self._detect_lbl.pack(anchor="w", pady=(4, 0))
+
+        # Card chip (hidden until SD detected)
+        self._card_chip = _bordered(self._content, self.LAV_SOFT, self.LAV_BRD, bd=2,
+                                     padx=12, pady=8)
+        chip_inner = tk.Frame(self._card_chip, bg=self.LAV_SOFT)
+        chip_inner.pack(fill="x")
+        chip_left = tk.Frame(chip_inner, bg=self.LAV_SOFT)
+        chip_left.pack(side="left", fill="x", expand=True)
+        self._chip_name = tk.Label(chip_left, text="", fg=self.INK, bg=self.LAV_SOFT,
+                                    font=("Helvetica", 11, "bold"), anchor="w")
+        self._chip_name.pack(fill="x")
+        self._chip_det = tk.Label(chip_left, text="", fg=self.INK_SOFT, bg=self.LAV_SOFT,
+                                   font=("Helvetica", 9), anchor="w")
+        self._chip_det.pack(fill="x")
+        tk.Label(chip_inner, text="✓  DETECTED", fg=self.LIME_DP, bg=self.LAV_SOFT,
+                 font=("Courier", 12, "bold"), padx=8).pack(side="right")
+
+    def _build_onion_warning(self):
+        self._onion_frame = tk.Frame(self, bg="#2a1f0f", padx=22, pady=8)
+        self._onion_lbl   = tk.Label(self._onion_frame, text="", fg="#fab387",
+                                      bg="#2a1f0f", font=("Helvetica", 9),
+                                      justify="left", anchor="w", wraplength=420)
+        self._onion_lbl.pack(side="left", fill="x", expand=True)
+        tk.Button(self._onion_frame, text="Get Onion OS →",
+                  command=lambda: webbrowser.open(ONION_URL),
+                  bg="#3a2e1a", fg="#89b4fa", relief="flat", padx=10,
+                  cursor="hand2", font=("Helvetica", 9, "bold")
+                  ).pack(side="right")
+        self._onion_frame.pack_forget()
+
+    def _build_rom_import(self):
+        sep = tk.Frame(self._content, height=1, bg=self.CREAM_IN)
+        sep.pack(fill="x", pady=(14, 0))
+
+        self._field_label(self._content, "ROM IMPORT",
+                          "optional · unzip ROMs, scan genres, clean duplicates")
+
+        chk = tk.Checkbutton(self._content, text="Import ROMs from a folder of ZIP files",
+                              variable=self._import_on, command=self._toggle_import,
+                              fg=self.INK, bg=self.CREAM,
+                              selectcolor=self.CREAM_IN, activebackground=self.CREAM,
+                              font=("Helvetica", 10))
+        chk.pack(anchor="w")
+
+        # ROM folder row (shown when checkbox ticked)
+        self._rom_row = tk.Frame(self._content, bg=self.CREAM)
+        rom_field = _bordered(self._rom_row, self.CREAM_IN, "#00000028", bd=2)
+        rom_field.pack(side="left", fill="x", expand=True, ipady=8)
+        self._rom_path_lbl = tk.Label(rom_field, textvariable=self._rom_src,
+                                       fg=self.INK_SOFT, bg=self.CREAM_IN,
+                                       font=("Courier", 12), anchor="w", padx=10, pady=2)
+        self._rom_path_lbl.pack(fill="x")
+        tk.Button(self._rom_row, text="Browse…", command=self._browse_roms,
+                  bg=self.CREAM_ROW, fg=self.INK, activebackground=self.LAV_SOFT,
+                  font=("Helvetica", 10, "bold"), relief="flat", bd=0,
+                  padx=14, pady=10, cursor="hand2",
+                  highlightthickness=2, highlightbackground="#00000028"
+                  ).pack(side="left", padx=(8, 0))
+
+        self._clean_chk = tk.Checkbutton(
+            self._content,
+            text="Remove duplicate / bad / hacked dumps — keep the best version of each game",
+            variable=self._clean_on,
+            fg=self.INK_SOFT, bg=self.CREAM,
+            selectcolor=self.CREAM_IN, activebackground=self.CREAM,
+            font=("Helvetica", 9))
+
+    def _build_actions(self):
+        sep = tk.Frame(self._content, height=1, bg=self.CREAM_IN)
+        sep.pack(fill="x", pady=(14, 0))
+
+        self._actions_frame = tk.Frame(self._content, bg=self.CREAM)
+        self._actions_frame.pack(fill="x", pady=(12, 0))
+
+        # Primary install button (lavender, matches btn-primary)
+        self._install_btn = tk.Button(
+            self._actions_frame,
+            text="▶  Install PocketOS",
+            command=self._on_install_btn,
+            bg=self.LAV, fg=self.INK,
+            activebackground=self.LAV_SOFT, activeforeground=self.INK,
+            font=("Helvetica", 14, "bold"), relief="flat", bd=0,
+            padx=16, pady=12, cursor="hand2",
+            highlightthickness=2, highlightbackground=self.LAV_BRD,
+        )
+        self._install_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        # Danger uninstall button
+        self._remove_btn = tk.Button(
+            self._actions_frame,
+            text="Uninstall",
+            command=self._do_uninstall,
+            bg=self.CREAM_ROW, fg=self.RED,
+            activebackground="#fce8e5", activeforeground=self.RED_DP,
+            font=("Helvetica", 13, "bold"), relief="flat", bd=0,
+            padx=16, pady=12, cursor="hand2",
+            highlightthickness=2, highlightbackground=self.RED,
+        )
+        self._remove_btn.pack(side="left")
+
+        # Hint below buttons
+        self._action_hint = tk.Label(
+            self._content,
+            text="Install: sets up PocketOS, imports ROMs (if selected), scans genres.\n"
+                 "Uninstall: removes PocketOS — your games and saves are not affected.",
+            fg=self.INK_SOFT, bg=self.CREAM, font=("Helvetica", 8),
+            justify="left", anchor="w")
+        self._action_hint.pack(fill="x", pady=(4, 0))
+
+    def _build_progress(self):
+        self._progress_wrap = tk.Frame(self._content, bg=self.CREAM)
+
+        head = tk.Frame(self._progress_wrap, bg=self.CREAM)
+        head.pack(fill="x", pady=(14, 5))
+        self._prog_lbl = tk.Label(head, text="Installing", fg=self.INK, bg=self.CREAM,
+                                   font=("Helvetica", 11, "bold"))
+        self._prog_lbl.pack(side="left")
+        self._pct_lbl = tk.Label(head, text="0%", fg=self.LAV_DEEP, bg=self.CREAM,
+                                  font=("Courier", 17))
+        self._pct_lbl.pack(side="right")
+
+        seg_outer = _bordered(self._progress_wrap, self.CREAM_IN, "#00000030", bd=2,
+                               padx=4, pady=4)
+        seg_outer.pack(fill="x")
+        self._segbar = tk.Canvas(seg_outer, height=14, bg=self.CREAM_IN,
+                                  highlightthickness=0)
+        self._segbar.pack(fill="x")
+        self._segbar.bind("<Configure>", lambda e: self._redraw_segbar())
+
+    def _build_console(self):
+        tk.Label(self._content, text="Progress log", fg=self.INK_SOFT, bg=self.CREAM,
+                 font=("Helvetica", 8), anchor="w").pack(fill="x", pady=(12, 2))
+
+        console_wrap = _bordered(self._content, self.CREAM_IN, "#00000028", bd=2)
+        console_wrap.pack(fill="x")
+
+        self._console = tk.Text(
+            console_wrap, height=9,
+            bg=self.CREAM_IN, fg=self.INK,
+            font=("Courier", 11), relief="flat", bd=0,
+            state="disabled", wrap="word",
+            padx=10, pady=8,
+        )
+        scrollbar = tk.Scrollbar(console_wrap, command=self._console.yview,
+                                  bg=self.CREAM_IN, troughcolor=self.CREAM_IN,
+                                  relief="flat", bd=0)
+        self._console.configure(yscrollcommand=scrollbar.set)
+        self._console.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self._console.tag_configure("gt",    foreground=self.INK_SOFT)
+        self._console.tag_configure("info",  foreground=self.INK)
+        self._console.tag_configure("ok",    foreground=self.LIME_DP)
+        self._console.tag_configure("warn",  foreground="#c98a16")
+        self._console.tag_configure("err",   foreground=self.RED)
+        self._console.tag_configure("done",  foreground=self.LIME_DP)
+        self._console.tag_configure("empty", foreground=self.INK_SOFT)
+
+        self._console.config(state="normal")
+        self._console.insert("end", "PocketOS Installer ready. Output will appear here.\n", "empty")
+        self._console.config(state="disabled")
+
+    def _build_footer(self):
+        foot = tk.Frame(self, bg=self.NAVY, height=44)
+        foot.pack(fill="x", side="bottom")
+        foot.pack_propagate(False)
+
+        # A hint
+        a_frame = tk.Frame(foot, bg=self.NAVY)
+        a_frame.pack(side="left", padx=(12, 0), fill="y")
+        a_frame.pack_configure(anchor="center")
+        self._a_glyph = tk.Label(a_frame, text="A", bg=self.LIME_DP, fg=self.NAVY,
+                                  font=("Helvetica", 9, "bold"), padx=5, pady=1)
+        self._a_glyph.pack(side="left", anchor="center", pady=13)
+        self._a_hint = tk.Label(a_frame, text="Install", fg="#c2cee4", bg=self.NAVY,
+                                 font=("Helvetica", 9, "bold"))
+        self._a_hint.pack(side="left", padx=(5, 0), anchor="center")
+
+        # B hint
+        b_frame = tk.Frame(foot, bg=self.NAVY)
+        b_frame.pack(side="left", padx=(10, 0), fill="y")
+        b_frame.pack_configure(anchor="center")
+        tk.Label(b_frame, text="B", bg="#ef6a4f", fg=self.NAVY,
+                 font=("Helvetica", 9, "bold"), padx=5, pady=1
+                 ).pack(side="left", anchor="center", pady=13)
+        self._b_hint = tk.Label(b_frame, text="Back", fg="#c2cee4", bg=self.NAVY,
+                                 font=("Helvetica", 9, "bold"))
+        self._b_hint.pack(side="left", padx=(5, 0), anchor="center")
+
+        # Status (right side)
+        self._foot_status = tk.Label(foot, text="Select your SD card to get started.",
+                                      fg="#aebbd3", bg=self.NAVY,
+                                      font=("Helvetica", 9, "bold"))
+        self._foot_status.pack(side="right", padx=14, anchor="center")
+
+        self._foot_dot = tk.Label(foot, text="●", fg="#7e8db0", bg=self.NAVY,
+                                   font=("Helvetica", 11))
+        self._foot_dot.pack(side="right", anchor="center")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Phase state machine
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _set_phase(self, phase: str, pct: int = None):
+        self._phase = phase
+        if pct is not None:
+            self._pct = pct
+        self._refresh_phase()
+
+    def _refresh_phase(self):
+        phase = self._phase
+        pct   = self._pct
+        busy  = phase in ("installing", "uninstalling")
+        done  = phase in ("success", "removed")
+        has_sd = bool(self._sd_path.get().strip())
+
+        # ── Title pill ──
+        pill_map = {
+            "ready":        ("READY",          self.LIME),
+            "success":      ("DONE",           self.LIME),
+            "removed":      ("DONE",           self.LIME),
+            "error":        ("ERROR",          self.RED),
+            "installing":   (f"{pct}%",        self.AMBER),
+            "uninstalling": (f"{pct}%",        self.AMBER),
+        }
+        if phase in pill_map:
+            self._set_pill(*pill_map[phase])
+        else:
+            self._set_pill("", "")
+
+        # ── Footer status ──
+        foot_map = {
+            "idle":         ("Select your SD card to get started.",               "#aebbd3"),
+            "ready":        ("Card ready — click Install to flash PocketOS.", self.LIME_DP),
+            "installing":   (f"Installing PocketOS… {pct}%",                 self.AMBER),
+            "uninstalling": (f"Removing PocketOS… {pct}%",                   self.AMBER),
+            "success":      ("PocketOS installed! Eject the card and boot.",       self.LIME_DP),
+            "removed":      ("PocketOS removed. SD card restored.",                self.LIME_DP),
+            "error":        ("Install failed — see log, then retry.",         self.RED),
+        }
+        txt, col = foot_map.get(phase, ("", "#aebbd3"))
+        self._foot_status.config(text=txt, fg=col)
+        dot_colors = {self.LIME_DP: self.LIME_DP, self.AMBER: self.AMBER, self.RED: self.RED}
+        self._foot_dot.config(fg=dot_colors.get(col, "#7e8db0"))
+
+        # ── Footer A hint ──
+        a_labels = {"success": "Finish", "removed": "Finish",
+                    "error": "Retry", "idle": "Install", "ready": "Install"}
+        self._a_hint.config(text=a_labels.get(phase, "—"))
+
+        # ── Install button label + state ──
+        if done:
+            self._install_btn.config(text="✓  Eject & Finish", state="normal",
+                                      bg=self.LIME_DP, fg="white",
+                                      highlightbackground="#3a8c26")
+        elif phase == "error":
+            self._install_btn.config(text="↩  Retry Install", state="normal",
+                                      bg=self.LAV, fg=self.INK,
+                                      highlightbackground=self.LAV_BRD)
+        elif busy:
+            self._install_btn.config(text="⏳  Working…", state="disabled",
+                                      bg=self.LAV, fg=self.INK,
+                                      highlightbackground=self.LAV_BRD)
+        else:
+            self._install_btn.config(text="▶  Install PocketOS",
+                                      state="normal" if has_sd else "disabled",
+                                      bg=self.LAV, fg=self.INK,
+                                      highlightbackground=self.LAV_BRD)
+
+        self._remove_btn.config(state="disabled" if busy else
+                                 ("normal" if has_sd else "disabled"))
+
+        # ── Progress section ──
+        if busy or phase in ("success", "removed", "error"):
+            self._progress_wrap.pack(fill="x", before=self._console_label_ref
+                                      if hasattr(self, "_console_label_ref") else None)
+            phase_labels = {"installing": "Installing", "success": "Installed",
+                            "uninstalling": "Removing",  "removed": "Removed",
+                            "error": "Failed"}
+            self._prog_lbl.config(text=phase_labels.get(phase, "Installing"))
+            self._pct_lbl.config(text=f"{pct}%",
+                                   fg=self.LIME_DP if pct >= 100 else self.LAV_DEEP)
+            self._redraw_segbar()
+        else:
+            self._progress_wrap.pack_forget()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Segmented progress bar
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _redraw_segbar(self):
+        self._segbar.update_idletasks()
+        w = self._segbar.winfo_width()
+        h = self._segbar.winfo_height()
+        if w < 10:
+            return
+        self._segbar.delete("all")
+        n    = self.SEG_COUNT
+        gap  = 3
+        pad  = 2
+        seg_w = max(2, (w - 2 * pad - (n - 1) * gap) // n)
+        segs_on = round((self._pct / 100) * n)
+        done    = self._pct >= 100
+        for i in range(n):
+            x = pad + i * (seg_w + gap)
+            if i < segs_on:
+                color = self.LIME_DP if done else self.LAV_DEEP
+            else:
+                color = self.CREAM_IN
+            self._segbar.create_rectangle(x, pad, x + seg_w, h - pad,
+                                           fill=color, outline="")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Log console
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _log_line(self, text: str, kind: str = "info"):
+        def _do():
+            self._console.config(state="normal")
+            self._console.insert("end", "> ", "gt")
+            self._console.insert("end", text + "\n", kind)
+            self._console.see("end")
+            self._console.config(state="disabled")
+        self.after(0, _do)
+
+    def _clear_log(self):
+        def _do():
+            self._console.config(state="normal")
+            self._console.delete("1.0", "end")
+            self._console.config(state="disabled")
+        self.after(0, _do)
+
+    def _log(self, text: str):
+        """Callable passed to backend functions."""
+        kind = "ok" if text.strip().startswith("✓") else \
+               "err" if text.strip().startswith("✗") or "ERROR" in text else \
+               "done" if "complete" in text.lower() or "done" in text.lower() else "info"
+        self._log_line(text, kind)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SD card detection / validation
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _auto_detect(self):
+        candidates = []
+        if sys.platform == "win32":
+            import string
+            for letter in string.ascii_uppercase:
+                p = Path(f"{letter}:\\")
+                if p.exists() and detect_sd(p):
+                    candidates.append(str(p))
+        else:
+            for mount in [Path("/media"), Path("/mnt"), Path("/Volumes")]:
+                if not mount.exists():
+                    continue
+                try:
+                    for child in mount.iterdir():
+                        if detect_sd(child):
+                            candidates.append(str(child))
+                        for grandchild in (child.iterdir() if child.is_dir() else []):
+                            if detect_sd(grandchild):
+                                candidates.append(str(grandchild))
+                except PermissionError:
+                    pass
+        if candidates:
+            self._sd_path.set(candidates[0])
+
+    def _browse_sd(self):
+        d = filedialog.askdirectory(title="Select the root of your Miyoo SD card")
+        if d:
+            self._sd_path.set(d)
+
+    def _browse_roms(self):
+        d = filedialog.askdirectory(title="Select folder containing ROM ZIP files",
+                                     initialdir=self._rom_src.get() or str(Path.home()))
+        if d:
+            self._rom_src.set(d)
+
+    def _validate(self):
+        raw = self._sd_path.get().strip()
+        if not raw:
+            self._detect_lbl.config(text="")
+            self._card_chip.pack_forget()
+            self._onion_frame.pack_forget()
+            self._set_phase("idle")
+            return
+
+        p = Path(raw)
+        if not p.is_dir():
+            self._onion_frame.pack_forget()
+            self._card_chip.pack_forget()
+            return
+
+        if detect_sd(p):
+            self._detect_lbl.config(
+                text="✓  Valid Miyoo SD card detected — ready",
+                fg=self.LIME_DP)
+            # Show card chip
+            self._chip_name.config(text=p.name or str(p))
+            self._chip_det.config(text=str(p))
+            self._card_chip.pack(fill="x", pady=(8, 0))
+            if self._phase == "idle":
+                self._set_phase("ready")
+            # Onion check
+            if not detect_onion(p):
+                self._onion_lbl.config(
+                    text="⚠  Onion OS not detected. PocketOS requires Onion OS — "
+                         "install it first, then come back.")
+                self._onion_frame.pack(fill="x", padx=0, pady=(6, 0))
+            else:
+                self._onion_frame.pack_forget()
+        else:
+            self._detect_lbl.config(
+                text="⚠  Doesn’t look like the SD card root — "
+                     "select the top-level folder",
+                fg="#c98a16")
+            self._card_chip.pack_forget()
+            self._onion_frame.pack_forget()
+            self._set_phase("idle")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # ROM import toggle
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _toggle_import(self):
         if self._import_on.get():
-            self._rom_row.pack(fill="x", pady=(4, 2))
-            self._clean_chk.pack(fill="x", pady=(2, 0))
+            self._rom_row.pack(fill="x", pady=(6, 2))
+            self._clean_chk.pack(anchor="w", pady=(2, 0))
             if not self._rom_src.get():
                 dl = Path.home() / "Downloads"
                 if dl.is_dir():
@@ -564,7 +1011,9 @@ class App(tk.Tk):
             self._rom_row.pack_forget()
             self._clean_chk.pack_forget()
 
-    # ── Version check ─────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
+    # Update check
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _check_for_update(self):
         def _run():
@@ -582,107 +1031,59 @@ class App(tk.Tk):
         self._latest_tag = tag
         self._latest_url = url
         self._update_lbl.config(
-            text=f"★  A newer version is available: {tag}\n"
-                 f"   Click to download and install {tag} instead of the bundled {VERSION}.")
+            text=f"★  Newer version available: {tag}  —  "
+                 f"click to install instead of the bundled {VERSION}")
         self._update_btn.config(text=f"Download & Install {tag}")
-        self._update_frame.pack(fill="x", padx=16, pady=(0, 6))
+        self._update_frame.pack(fill="x", pady=(0, 0))
 
-    # ── SD card auto-detect & validation ──────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
+    # Button handlers
+    # ─────────────────────────────────────────────────────────────────────────
 
-    def _auto_detect(self):
-        candidates = []
-        if sys.platform == "win32":
-            import string
-            for letter in string.ascii_uppercase:
-                p = Path(f"{letter}:\\")
-                if p.exists() and detect_sd(p):
-                    candidates.append(str(p))
+    def _on_install_btn(self):
+        if self._phase in ("success", "removed"):
+            self._reset()
         else:
-            for mount in [Path("/media"), Path("/mnt"), Path("/Volumes")]:
-                if not mount.exists():
-                    continue
-                for child in mount.iterdir():
-                    if detect_sd(child):
-                        candidates.append(str(child))
-                    for grandchild in (child.iterdir() if child.is_dir() else []):
-                        if detect_sd(grandchild):
-                            candidates.append(str(grandchild))
-        if candidates:
-            self._sd_path.set(candidates[0])
-            self._detect_lbl.config(
-                text="✓ Miyoo SD card detected automatically — ready to install", fg="#a6e3a1")
-            self._status.config(text="SD card found. Click Set Up PocketOS when ready.")
+            self._do_setup()
 
-    def _browse_sd(self):
-        d = filedialog.askdirectory(title="Select the root of your Miyoo SD card")
-        if d:
-            self._sd_path.set(d)
+    def _reset(self):
+        self._sd_path.set("")
+        self._rom_src.set("")
+        self._import_on.set(False)
+        self._card_chip.pack_forget()
+        self._onion_frame.pack_forget()
+        self._detect_lbl.config(text="")
+        self._clear_log()
+        self._toggle_import()
+        self._set_phase("idle")
 
-    def _browse_roms(self):
-        d = filedialog.askdirectory(title="Select folder containing ROM ZIP files",
-                                     initialdir=self._rom_src.get() or str(Path.home()))
-        if d:
-            self._rom_src.set(d)
+    def _get_sd(self) -> Path | None:
+        sd = Path(self._sd_path.get().strip())
+        if not sd.is_dir():
+            messagebox.showerror(
+                "No SD Card Selected",
+                "Please select the root folder of your Miyoo SD card.\n\n"
+                "It's the top-level folder that contains Roms/, BIOS/, etc.")
+            return None
+        return sd
 
-    def _validate(self):
-        p = Path(self._sd_path.get().strip())
-        if not p.is_dir():
-            self._onion_frame.pack_forget()
-            return
-        if detect_sd(p):
-            self._detect_lbl.config(text="✓ Looks like a valid Miyoo SD card — ready", fg="#a6e3a1")
-            self._status.config(text="SD card selected. Click Set Up PocketOS when ready.")
-        else:
-            self._detect_lbl.config(
-                text="⚠  Doesn't look like the SD card root — select the top-level folder",
-                fg="#fab387")
-        if detect_sd(p) and not detect_onion(p):
-            self._onion_lbl.config(
-                text="⚠  Onion OS not detected on this card.\n"
-                     "PocketOS runs on top of Onion OS — install Onion first, then come back here.")
-            self._onion_frame.pack(fill="x", padx=16, pady=(0, 8))
-        else:
-            self._onion_frame.pack_forget()
-
-    # ── Log / busy helpers ────────────────────────────────────────────────────
-
-    def _log_line(self, text: str):
-        def _do():
-            self._log.config(state="normal")
-            self._log.insert("end", text + "\n")
-            self._log.see("end")
-            self._log.config(state="disabled")
-        self.after(0, _do)
-
-    def _set_busy(self, busy: bool):
-        state = "disabled" if busy else "normal"
-        self._setup_btn.config(state=state)
-        self._remove_btn.config(state=state)
-        if busy:
-            self._progress.start()
-        else:
-            self._progress.stop()
-
-    def _clear_log(self):
-        self._log.config(state="normal")
-        self._log.delete("1.0", "end")
-        self._log.config(state="disabled")
-
-    # ── Main setup flow ───────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
+    # Main setup flow
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _do_setup(self):
         sd = self._get_sd()
         if sd is None:
             return
         if not PAYLOAD_BIN.exists():
-            messagebox.showerror("Installer Error",
-                                 f"PocketOS payload not found inside the installer.\n"
-                                 f"Try re-downloading from the releases page.\n"
-                                 f"Expected: {PAYLOAD_BIN}")
+            messagebox.showerror(
+                "Installer Error",
+                f"PocketOS payload not found inside the installer.\n"
+                f"Try re-downloading from the releases page.\n"
+                f"Expected: {PAYLOAD_BIN}")
             return
         self._clear_log()
-        self._set_busy(True)
-        self._status.config(text="Running setup — don't eject the SD card...")
+        self._set_phase("installing", 0)
 
         do_import = self._import_on.get()
         rom_src   = Path(self._rom_src.get().strip()) if do_import else None
@@ -691,35 +1092,32 @@ class App(tk.Tk):
         def _run():
             try:
                 self._run_setup(sd, rom_src, do_clean)
-                self.after(0, lambda: self._status.config(
-                    text="✓ Done! Eject your SD card safely, then power on your device."))
+                self.after(0, lambda: self._set_phase("success", 100))
             except Exception as e:
-                self._log_line(f"\n✗ ERROR: {e}")
-                self.after(0, lambda: self._status.config(text="Setup failed — check log for details."))
-            finally:
-                self.after(0, lambda: self._set_busy(False))
+                self._log_line(f"✗ ERROR: {e}", "err")
+                self.after(0, lambda: self._set_phase("error", self._pct))
 
         threading.Thread(target=_run, daemon=True).start()
 
     def _run_setup(self, sd: Path, rom_src: Path | None, do_clean: bool):
-        log = self._log_line
+        log = self._log
         roms_root = sd / "Roms"
 
-        # ── Phase 1: Install PocketOS ─────────────────────────────────────────
+        # Phase 1 — install
         log("── Phase 1: Installing PocketOS ──")
+        self.after(0, lambda: self._set_phase("installing", 10))
         install(sd, log)
         log("✓ PocketOS installed\n")
+        self.after(0, lambda: self._set_phase("installing", 35))
 
-        # ── Phase 2: Import ROMs ──────────────────────────────────────────────
-        affected_systems = set()
-
+        # Phase 2 — ROM import
+        affected_systems: set = set()
         if rom_src and rom_src.is_dir():
             log("── Phase 2: Importing ROMs ──")
             zips = sorted(rom_src.glob("*.zip"))
             log(f"  Found {len(zips)} ZIP(s) in {rom_src}")
             extracted_total = skipped = 0
-
-            for zip_path in zips:
+            for i, zip_path in enumerate(zips):
                 ext, candidates = detect_system(zip_path)
                 if not candidates:
                     log(f"  [?] {zip_path.name} — unrecognised, skipping")
@@ -735,11 +1133,13 @@ class App(tk.Tk):
                 extracted_total += len(new_files)
                 if new_files:
                     affected_systems.add(dest_folder.name)
+                pct = 35 + int(35 * (i + 1) / max(len(zips), 1))
+                self.after(0, lambda p=pct: self._set_phase("installing", p))
 
             log(f"\n  Extracted {extracted_total} file(s), {skipped} unrecognised ZIP(s) skipped")
 
             if do_clean and affected_systems:
-                log("\n── Phase 2b: Removing duplicate/bad dumps ──")
+                log("── Phase 2b: Removing duplicate/bad dumps ──")
                 total_removed = 0
                 for sys_folder in sorted(affected_systems):
                     removed = clean_variants(roms_root / sys_folder, log)
@@ -749,37 +1149,38 @@ class App(tk.Tk):
                 log(f"  Total removed: {total_removed}")
         else:
             log("── Phase 2: ROM import skipped ──")
-            # Still scan all existing systems for missing genre data
             if roms_root.is_dir():
                 for d in roms_root.iterdir():
                     if d.is_dir():
-                        has_roms = any(f.suffix.lower() in ROM_EXTS for f in d.iterdir() if f.is_file())
+                        has_roms = any(f.suffix.lower() in ROM_EXTS
+                                       for f in d.iterdir() if f.is_file())
                         if has_roms and not (d / "miyoogamelist.xml").exists():
                             affected_systems.add(d.name)
 
+        self.after(0, lambda: self._set_phase("installing", 70))
         log("")
 
-        # ── Phase 3: Genre scan ───────────────────────────────────────────────
+        # Phase 3 — genre scan
         db_path   = _find_db()
         overrides = _load_overrides()
-
         if not affected_systems:
             log("── Phase 3: Genre scan skipped (no new ROMs) ──")
         elif not db_path:
             log("── Phase 3: Genre scan skipped (openvgdb.sqlite not found) ──")
-            log(f"  Expected at: {Path(__file__).parent / 'openvgdb.sqlite'}")
         else:
             log("── Phase 3: Scanning genres ──")
             total_added = 0
-            for sys_folder in sorted(affected_systems):
+            for i, sys_folder in enumerate(sorted(affected_systems)):
                 added = scan_genres_for_system(roms_root, sys_folder, db_path, log)
                 if added:
                     log(f"  {sys_folder}: added {added} entry/entries")
                     total_added += added
+                pct = 70 + int(25 * (i + 1) / max(len(affected_systems), 1))
+                self.after(0, lambda p=pct: self._set_phase("installing", p))
             log(f"  Total genre entries added: {total_added}")
 
             if overrides:
-                log("\n── Phase 3b: Applying manual genre overrides ──")
+                log("── Phase 3b: Applying manual genre overrides ──")
                 total_fixed = 0
                 for sys_folder in sorted(affected_systems):
                     fixed = apply_overrides(roms_root, sys_folder, overrides, log)
@@ -788,21 +1189,23 @@ class App(tk.Tk):
                         total_fixed += fixed
                 log(f"  Total overrides applied: {total_fixed}")
 
+        self.after(0, lambda: self._set_phase("installing", 99))
         log("\n✓ Setup complete.")
         log("  Eject your SD card safely, insert it into your Miyoo Mini Plus, and power on.")
-        log("  PocketOS launches automatically — no extra steps needed on the device.")
+        log("  PocketOS launches automatically.")
 
-    # ── Update install (download latest from GitHub) ──────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
+    # Update install (download latest from GitHub)
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _do_update_install(self):
         sd = self._get_sd()
         if sd is None or not self._latest_url:
             return
         self._clear_log()
-        self._set_busy(True)
+        self._set_phase("installing", 0)
         tag = self._latest_tag
         url = self._latest_url
-        self._status.config(text=f"Downloading {tag} — don't eject the SD card...")
 
         def _run():
             tmp_dir = None
@@ -813,8 +1216,8 @@ class App(tk.Tk):
 
                 def _progress(count, block, total):
                     if total > 0:
-                        pct = min(100, count * block * 100 // total)
-                        self._log_line(f"  {pct}%  ({count*block/1048576:.1f} / {total/1048576:.1f} MB)")
+                        pct = min(90, count * block * 100 // total)
+                        self.after(0, lambda p=pct: self._set_phase("installing", p))
 
                 urllib.request.urlretrieve(url, zip_path, reporthook=_progress)
                 self._log_line("► Extracting...")
@@ -831,58 +1234,47 @@ class App(tk.Tk):
                 self._log_line(f"► Installing PocketOS {tag}...")
                 install_from_dir(src_dir, sd, self._log_line)
                 self._log_line(f"\n✓ PocketOS {tag} installed!")
-                self.after(0, lambda: self._status.config(
-                    text=f"✓ PocketOS {tag} installed! Eject safely, then power on."))
+                self.after(0, lambda: self._set_phase("success", 100))
                 self.after(0, lambda: self._update_frame.pack_forget())
             except Exception as e:
-                self._log_line(f"\n✗ ERROR: {e}")
-                self.after(0, lambda: self._status.config(text="Download failed — check log."))
+                self._log_line(f"\n✗ ERROR: {e}", "err")
+                self.after(0, lambda: self._set_phase("error", self._pct))
             finally:
                 if tmp_dir:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
-                self.after(0, lambda: self._set_busy(False))
 
         threading.Thread(target=_run, daemon=True).start()
 
-    # ── Uninstall ─────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
+    # Uninstall
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _do_uninstall(self):
         sd = self._get_sd()
         if sd is None:
             return
-        if not messagebox.askyesno("Remove PocketOS?",
-                                    "This will remove PocketOS from your SD card.\n\n"
-                                    "The default Onion OS menu will return on next boot.\n"
-                                    "Your games, saves, and settings are not affected.\n\n"
-                                    "Continue?"):
+        if not messagebox.askyesno(
+            "Remove PocketOS?",
+            "This will remove PocketOS from your SD card.\n\n"
+            "The default Onion OS menu will return on next boot.\n"
+            "Your games, saves, and settings are not affected.\n\n"
+            "Continue?"):
             return
         self._clear_log()
-        self._set_busy(True)
-        self._status.config(text="Removing PocketOS — don't eject the SD card...")
+        self._set_phase("uninstalling", 0)
 
         def _run():
             try:
+                self.after(0, lambda: self._set_phase("uninstalling", 30))
                 uninstall(sd, self._log_line)
+                self.after(0, lambda: self._set_phase("uninstalling", 80))
                 self._log_line("\n✓ PocketOS removed. Eject your SD card safely.")
-                self.after(0, lambda: self._status.config(text="✓ Done! Eject safely, then power on."))
+                self.after(0, lambda: self._set_phase("removed", 100))
             except Exception as e:
-                self._log_line(f"\n✗ ERROR: {e}")
-                self.after(0, lambda: self._status.config(text="Removal failed — check log."))
-            finally:
-                self.after(0, lambda: self._set_busy(False))
+                self._log_line(f"\n✗ ERROR: {e}", "err")
+                self.after(0, lambda: self._set_phase("error", self._pct))
 
         threading.Thread(target=_run, daemon=True).start()
-
-    # ── Shared helpers ────────────────────────────────────────────────────────
-
-    def _get_sd(self) -> Path | None:
-        sd = Path(self._sd_path.get().strip())
-        if not sd.is_dir():
-            messagebox.showerror("No SD Card Selected",
-                                 "Please select the root folder of your Miyoo SD card first.\n\n"
-                                 "It's the top-level folder that contains Roms/, BIOS/, etc.")
-            return None
-        return sd
 
 
 if __name__ == "__main__":
