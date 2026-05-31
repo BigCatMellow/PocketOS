@@ -8,8 +8,6 @@ a = Analysis(
     datas=[
         ('../release/pocketOS-v1.0/.tmp_update/bin/pocketOS', '.tmp_update/bin'),
         ('../release/pocketOS-v1.0/.tmp_update/res/pocketos', '.tmp_update/res/pocketos'),
-        ('openvgdb.sqlite', '.'),
-        ('fix_unsorted.py', '.'),
     ],
     hiddenimports=[],
     hookspath=[],

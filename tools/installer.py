@@ -354,8 +354,16 @@ def apply_overrides(roms_root: Path, system_folder: str, overrides: dict, log) -
         gamelist.write_text(pretty, encoding="utf-8")
     return changed
 
+def _asset_dir() -> Path:
+    """Directory to search for loose data files (openvgdb, overrides).
+    When frozen: folder containing the executable.
+    When running from source: the tools/ directory."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
 def _load_overrides() -> dict:
-    fix_path = Path(__file__).parent / "fix_unsorted.py"
+    fix_path = _asset_dir() / "fix_unsorted.py"
     if not fix_path.exists():
         return {}
     ns = {}
@@ -363,7 +371,7 @@ def _load_overrides() -> dict:
     return ns.get("OVERRIDES", {})
 
 def _find_db() -> Path | None:
-    p = Path(__file__).parent / "openvgdb.sqlite"
+    p = _asset_dir() / "openvgdb.sqlite"
     return p if p.exists() else None
 
 
