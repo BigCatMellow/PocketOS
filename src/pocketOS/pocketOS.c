@@ -26,6 +26,24 @@
 #include <ctype.h>
 #include <errno.h>
 #include <zlib.h>
+#if __has_include(<sqlite3.h>)
+#include <sqlite3.h>
+#elif __has_include(<sqlite3/sqlite3.h>)
+#include <sqlite3/sqlite3.h>
+#else
+typedef struct sqlite3 sqlite3;
+typedef struct sqlite3_stmt sqlite3_stmt;
+#define SQLITE_OK 0
+#define SQLITE_ROW 100
+#define SQLITE_OPEN_READONLY 0x00000001
+extern int sqlite3_open_v2(const char *filename, sqlite3 **ppDb, int flags, const char *zVfs);
+extern int sqlite3_close(sqlite3 *);
+extern const char *sqlite3_errmsg(sqlite3 *);
+extern int sqlite3_prepare_v2(sqlite3 *db, const char *zSql, int nByte, sqlite3_stmt **ppStmt, const char **pzTail);
+extern int sqlite3_step(sqlite3_stmt *);
+extern const unsigned char *sqlite3_column_text(sqlite3_stmt *, int iCol);
+extern int sqlite3_finalize(sqlite3_stmt *pStmt);
+#endif
 
 #ifdef POCKETOS_ENABLE_AUDIO
 typedef struct Mix_Chunk Mix_Chunk;
@@ -96,6 +114,8 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #ifndef LOG_PATH
 #define LOG_PATH    SYSDIR "/logs/pocketos_debug.log"
 #endif
+#define MOST_PLAYED_DB \
+    POCKETOS_ROOT "/Saves/CurrentProfile/play_activity/play_activity_db.sqlite"
 #ifndef FONT_PATH
 #define FONT_PATH   POCKETOS_ROOT "/miyoo/app/Exo-2-Bold-Italic_Universal.ttf"
 #endif
@@ -168,6 +188,7 @@ typedef enum {
     STATE_GAMES,
     STATE_RECENT,
     STATE_FAVORITES,
+    STATE_MOST_PLAYED,
     STATE_APPS,
     STATE_SETTINGS,
     STATE_FONT_PICKER,
@@ -264,6 +285,11 @@ static PlayEntry favorite_entries[MAX_GAMES];
 static int favorite_count = 0;
 static int favorite_sel = 0;
 static int favorite_offset = 0;
+
+static PlayEntry most_played_entries[MAX_GAMES];
+static int most_played_count  = 0;
+static int most_played_sel    = 0;
+static int most_played_offset = 0;
 
 static int app_sel    = 0;
 static int app_offset = 0;
@@ -366,13 +392,13 @@ static int screenshot_toast_frames = 0;  /* > 0 = show "Saved" toast */
 // ── Home menu ────────────────────────────────────────────────────────────────
 
 static const char *HOME_LABELS[] = {
-    "Favorites", "Recent", "Library", "Sleep", "Browse", "Apps", "Settings"
+    "Favorites", "Recent", "Most Played", "Library", "Sleep", "Browse", "Apps", "Settings"
 };
 static const char *HOME_ICONS[] = {
-    "favorites.png", "recent.png", "library.png", "sleep.png",
+    "favorites.png", "recent.png", "activity.png", "library.png", "sleep.png",
     "browse.png",    "apps.png",   "settings.png"
 };
-#define HOME_COUNT 7
+#define HOME_COUNT 8
 
 static AppEntry APP_ENTRIES[] = {
     { "Advanced Menu",   "tools.png",        "cd /mnt/SDCARD/App/AdvanceMENU; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
@@ -1156,17 +1182,20 @@ static void log_timer_end(LogTimer lt) {
 /* State names for readable state-transition logging */
 static const char *state_name(int s) {
     switch (s) {
-        case 0:  return "HOME";
-        case 1:  return "FAVORITES";
-        case 2:  return "RECENT";
-        case 3:  return "SYSTEMS";
-        case 4:  return "GAMES";
-        case 5:  return "APPS";
-        case 6:  return "SETTINGS";
-        case 7:  return "BROWSE_CATS";
-        case 8:  return "BROWSE_GAMES";
-        case 9:  return "INFO_PANEL";
-        case 10: return "GAME_OPTIONS";
+        case STATE_HOME:        return "HOME";
+        case STATE_SYSTEMS:     return "SYSTEMS";
+        case STATE_GAMES:       return "GAMES";
+        case STATE_RECENT:      return "RECENT";
+        case STATE_FAVORITES:   return "FAVORITES";
+        case STATE_MOST_PLAYED: return "MOST_PLAYED";
+        case STATE_APPS:        return "APPS";
+        case STATE_SETTINGS:    return "SETTINGS";
+        case STATE_FONT_PICKER: return "FONT_PICKER";
+        case STATE_THEME_PICKER:return "THEME_PICKER";
+        case STATE_BROWSE_CATS: return "BROWSE_CATS";
+        case STATE_BROWSE_GAMES:return "BROWSE_GAMES";
+        case STATE_INFO_PANEL:  return "INFO_PANEL";
+        case STATE_GAME_OPTIONS:return "GAME_OPTIONS";
         default: return "UNKNOWN";
     }
 }
@@ -1689,6 +1718,84 @@ static void load_favorites(void) {
     favorite_sel = 0;
     favorite_offset = 0;
     log_timer_end(_t);
+}
+
+static void load_most_played(void) {
+    most_played_count = 0;
+    most_played_sel = 0;
+    most_played_offset = 0;
+
+    if (access(MOST_PLAYED_DB, R_OK) != 0) {
+        log_kv("most_played db not found", MOST_PLAYED_DB);
+        return;
+    }
+
+    sqlite3 *db = NULL;
+    if (sqlite3_open_v2(MOST_PLAYED_DB, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+        log_kv("most_played open failed", db ? sqlite3_errmsg(db) : MOST_PLAYED_DB);
+        if (db) sqlite3_close(db);
+        return;
+    }
+
+    const char *sql =
+        "SELECT rom.name, rom.file_path, rom.type, "
+        "SUM(play_activity.play_time) AS total_secs "
+        "FROM rom JOIN play_activity ON rom.id = play_activity.rom_id "
+        "WHERE play_activity.play_time IS NOT NULL "
+        "GROUP BY rom.id HAVING total_secs > 60 "
+        "ORDER BY total_secs DESC LIMIT 500;";
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        log_kv("most_played prepare failed", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW && most_played_count < MAX_GAMES) {
+        const char *name = (const char *)sqlite3_column_text(stmt, 0);
+        const char *fpath = (const char *)sqlite3_column_text(stmt, 1);
+        const char *sys = (const char *)sqlite3_column_text(stmt, 2);
+        if (!name || !fpath) continue;
+
+        PlayEntry *e = &most_played_entries[most_played_count];
+        memset(e, 0, sizeof(*e));
+
+        clean_display_name(name, e->label, sizeof(e->label));
+
+        const char *rel_path = fpath;
+        if (strncmp(rel_path, ROMS_ROOT "/", strlen(ROMS_ROOT) + 1) == 0)
+            rel_path += strlen(ROMS_ROOT) + 1;
+
+        if (fpath[0] == '/')
+            snprintf(e->rompath, sizeof(e->rompath), "%s", fpath);
+        else
+            snprintf(e->rompath, sizeof(e->rompath), ROMS_ROOT "/%s", fpath);
+
+        const char *effective_sys = (sys && sys[0] && strcmp(sys, "ORPHAN") != 0)
+                                    ? sys : NULL;
+        char sys_buf[48] = {0};
+        if (!effective_sys && rel_path[0] != '/') {
+            snprintf(sys_buf, sizeof(sys_buf), "%s", rel_path);
+            char *slash = strchr(sys_buf, '/');
+            if (slash) {
+                *slash = '\0';
+                effective_sys = sys_buf;
+            }
+        }
+        if (!effective_sys) {
+            log_kv("most_played no system for", fpath);
+            continue;
+        }
+        snprintf(e->launch, sizeof(e->launch), EMU_ROOT "/%s/launch.sh", effective_sys);
+        snprintf(e->system, sizeof(e->system), "%s", effective_sys);
+
+        most_played_count++;
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    log_int("most_played loaded", most_played_count);
 }
 
 #define FAV_PATH POCKETOS_ROOT "/Roms/favourite.json"
@@ -2771,6 +2878,9 @@ static void draw_entry_list(const char *title, PlayEntry *entries, int count,
         } else if (strcmp(title, "Recent") == 0) {
             hint1 = "No recent games yet.";
             hint2 = "Play a game and it will appear here.";
+        } else if (strcmp(title, "Most Played") == 0) {
+            hint1 = "No play data yet.";
+            hint2 = "Play Activity data will appear here.";
         } else {
             hint1 = "Nothing here yet.";
         }
@@ -3183,6 +3293,10 @@ static void draw_game_options(void) {
     case STATE_RECENT:
         draw_entry_list("Recent", recent_entries, recent_count,
                         &recent_sel, &recent_offset, 0);
+        break;
+    case STATE_MOST_PLAYED:
+        draw_entry_list("Most Played", most_played_entries, most_played_count,
+                        &most_played_sel, &most_played_offset, 0);
         break;
     default:
         draw_panel();
@@ -3634,6 +3748,10 @@ static void render(void) {
     case STATE_RECENT:
         draw_entry_list("Recent", recent_entries, recent_count, &recent_sel, &recent_offset, 0);
         break;
+    case STATE_MOST_PLAYED:
+        draw_entry_list("Most Played", most_played_entries, most_played_count,
+                        &most_played_sel, &most_played_offset, 0);
+        break;
     case STATE_FAVORITES:
         draw_entry_list("Favorites", favorite_entries, favorite_count, &favorite_sel, &favorite_offset, 1);
         break;
@@ -3692,13 +3810,17 @@ static void on_home_key(SDLKey k) {
             load_recent();
             state = STATE_RECENT;
             break;
-        case 2: // Library
+        case 2: // Most Played
+            load_most_played();
+            state = STATE_MOST_PLAYED;
+            break;
+        case 3: // Library
             state = STATE_SYSTEMS;
             break;
-        case 3: // Sleep
+        case 4: // Sleep
             exec_power_cmd("echo mem > /sys/power/state");
             break;
-        case 4: // Browse
+        case 5: // Browse
             if (browse_genre_count == 0) {
                 LogTimer _t = log_timer_begin("load_browse_data");
                 load_browse_data();
@@ -3707,10 +3829,10 @@ static void on_home_key(SDLKey k) {
             browse_genre_sel = 0; browse_genre_off = 0;
             state = STATE_BROWSE_CATS;
             break;
-        case 5: // Apps
+        case 6: // Apps
             state = STATE_APPS;
             break;
-        case 6: // Settings
+        case 7: // Settings
             open_settings_kind("display");
             break;
         }
@@ -4383,6 +4505,10 @@ int main(int argc, char *argv[]) {
                 case STATE_GAMES:   on_games_key(k);   break;
                 case STATE_RECENT:
                     on_entry_key(k, recent_entries, recent_count, &recent_sel, &recent_offset, STATE_RECENT);
+                    break;
+                case STATE_MOST_PLAYED:
+                    on_entry_key(k, most_played_entries, most_played_count,
+                                 &most_played_sel, &most_played_offset, STATE_MOST_PLAYED);
                     break;
                 case STATE_FAVORITES:
                     on_entry_key(k, favorite_entries, favorite_count, &favorite_sel, &favorite_offset, STATE_FAVORITES);
