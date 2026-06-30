@@ -127,7 +127,7 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 // ── Max items ────────────────────────────────────────────────────────────────
 
 #define MAX_SYSTEMS  64
-#define MAX_GAMES   1500
+#define MAX_GAMES   4096
 
 // ── Colors (static helpers use COL macro after screen is init'd) ──────────────
 
@@ -214,7 +214,7 @@ typedef struct {
 
 #define BROWSE_GENRE_MAX   72
 #define BROWSE_GENRE_LEN   48
-#define BROWSE_GAME_MAX  2048
+#define BROWSE_GAME_MAX  4096
 
 typedef struct {
     char  title[240];
@@ -366,11 +366,11 @@ static int screenshot_toast_frames = 0;  /* > 0 = show "Saved" toast */
 // ── Home menu ────────────────────────────────────────────────────────────────
 
 static const char *HOME_LABELS[] = {
-    "Favorites", "Recent", "Library", "Browse", "Apps", "Settings", "Sleep"
+    "Favorites", "Recent", "Library", "Sleep", "Browse", "Apps", "Settings"
 };
 static const char *HOME_ICONS[] = {
-    "favorites.png", "recent.png", "library.png", "browse.png",
-    "apps.png",      "settings.png", "sleep.png"
+    "favorites.png", "recent.png", "library.png", "sleep.png",
+    "browse.png",    "apps.png",   "settings.png"
 };
 #define HOME_COUNT 7
 
@@ -447,6 +447,113 @@ static void strip_ext(const char *filename, char *out, int outlen) {
     out[outlen - 1] = '\0';
     char *dot = strrchr(out, '.');
     if (dot) *dot = '\0';
+}
+
+static int is_numeric_token(const char *s) {
+    if (!s || !*s) return 0;
+    for (const char *p = s; *p; p++)
+        if (!isdigit((unsigned char)*p)) return 0;
+    return 1;
+}
+
+static void trim_display_name(char *s) {
+    if (!s) return;
+
+    char *start = s;
+    while (*start && isspace((unsigned char)*start)) start++;
+    if (start != s) memmove(s, start, strlen(start) + 1);
+
+    int len = (int)strlen(s);
+    while (len > 0 && isspace((unsigned char)s[len - 1])) s[--len] = '\0';
+}
+
+static void collapse_display_spaces(char *s) {
+    char *dst = s;
+    int in_space = 0;
+
+    for (char *src = s; *src; src++) {
+        if (isspace((unsigned char)*src)) {
+            if (!in_space) *dst++ = ' ';
+            in_space = 1;
+        } else {
+            *dst++ = *src;
+            in_space = 0;
+        }
+    }
+    *dst = '\0';
+    trim_display_name(s);
+}
+
+static void strip_bracket_tags(char *s, char open_ch, char close_ch) {
+    char *src = s;
+    char *dst = s;
+
+    while (*src) {
+        if (*src == open_ch) {
+            char *end = strchr(src + 1, close_ch);
+            if (end) {
+                src = end + 1;
+                if (dst > s && !isspace((unsigned char)dst[-1])) *dst++ = ' ';
+                continue;
+            }
+        }
+        *dst++ = *src++;
+    }
+    *dst = '\0';
+    collapse_display_spaces(s);
+}
+
+static char *token_start_before(char *s, char *end) {
+    while (end > s && isspace((unsigned char)end[-1])) end--;
+    while (end > s && !isspace((unsigned char)end[-1])) end--;
+    return end;
+}
+
+static void strip_trailing_date_tokens(char *s) {
+    for (;;) {
+        trim_display_name(s);
+        int len = (int)strlen(s);
+        if (len == 0) return;
+
+        char *last = token_start_before(s, s + len);
+        int last_len = (int)strlen(last);
+        if (is_numeric_token(last) && (last_len == 6 || last_len == 8)) {
+            if (last > s) last[-1] = '\0';
+            else *last = '\0';
+            continue;
+        }
+
+        char *second = token_start_before(s, last);
+        char *third = token_start_before(s, second);
+        if (third < second && second < last) {
+            char y[8], m[8], d[8];
+            snprintf(y, sizeof(y), "%.*s", (int)(second - third - 1), third);
+            snprintf(m, sizeof(m), "%.*s", (int)(last - second - 1), second);
+            snprintf(d, sizeof(d), "%s", last);
+            if (strlen(y) == 4 && strlen(m) <= 2 && strlen(d) <= 2 &&
+                is_numeric_token(y) && is_numeric_token(m) && is_numeric_token(d)) {
+                if (third > s) third[-1] = '\0';
+                else *third = '\0';
+                continue;
+            }
+        }
+        return;
+    }
+}
+
+static void clean_display_name(const char *src, char *dst, int dstlen) {
+    if (dstlen <= 0) return;
+
+    if (!src) src = "";
+    if (src != dst) {
+        strncpy(dst, src, dstlen - 1);
+        dst[dstlen - 1] = '\0';
+    }
+
+    strip_bracket_tags(dst, '(', ')');
+    strip_bracket_tags(dst, '[', ']');
+    strip_trailing_date_tokens(dst);
+    collapse_display_spaces(dst);
 }
 
 // ── Utility: tiny JSON string reader (no external dependency) ─────────────────
@@ -1520,6 +1627,7 @@ static void load_games(int idx) {
 
         char display[240];
         strip_ext(ent->d_name, display, sizeof(display));
+        clean_display_name(display, display, sizeof(display));
 
         Game *g = &games[game_count++];
         strncpy(g->name, display,  sizeof(g->name) - 1);
@@ -1550,6 +1658,7 @@ static void load_play_entries(const char *path, PlayEntry *entries, int *count, 
         if (!json_str_from_buf(line, "label", e->label, sizeof(e->label))) continue;
         if (!json_str_from_buf(line, "rompath", e->rompath, sizeof(e->rompath))) continue;
         if (!json_str_from_buf(line, "launch", e->launch, sizeof(e->launch))) continue;
+        clean_display_name(e->label, e->label, sizeof(e->label));
         system_from_launch(e->launch, e->system, sizeof(e->system));
         (*count)++;
     }
@@ -2774,7 +2883,16 @@ static void parse_miyoogamelist(const char *xml_path, const char *sys_folder) {
             int n = (int)(end-p); if (n > 127) n = 127;
             strncpy(raw, p, n);
             BrowseGame *g = &browse_game_pool[browse_game_count++];
-            strncpy(g->title,  cur_name[0] ? cur_name : cur_path, 239);
+            char title[240];
+            if (cur_name[0]) {
+                strncpy(title, cur_name, sizeof(title) - 1);
+                title[sizeof(title) - 1] = '\0';
+            } else {
+                const char *fname_for_title = cur_path;
+                if (fname_for_title[0] == '.' && fname_for_title[1] == '/') fname_for_title += 2;
+                strip_ext(fname_for_title, title, sizeof(title));
+            }
+            clean_display_name(title, g->title, sizeof(g->title));
             strncpy(g->system, sys_folder, 23);
             const char *fname = cur_path;
             if (fname[0] == '.' && fname[1] == '/') fname += 2;
@@ -3577,7 +3695,10 @@ static void on_home_key(SDLKey k) {
         case 2: // Library
             state = STATE_SYSTEMS;
             break;
-        case 3: // Browse
+        case 3: // Sleep
+            exec_power_cmd("echo mem > /sys/power/state");
+            break;
+        case 4: // Browse
             if (browse_genre_count == 0) {
                 LogTimer _t = log_timer_begin("load_browse_data");
                 load_browse_data();
@@ -3586,14 +3707,11 @@ static void on_home_key(SDLKey k) {
             browse_genre_sel = 0; browse_genre_off = 0;
             state = STATE_BROWSE_CATS;
             break;
-        case 4: // Apps
+        case 5: // Apps
             state = STATE_APPS;
             break;
-        case 5: // Settings
+        case 6: // Settings
             open_settings_kind("display");
-            break;
-        case 6: // Sleep
-            exec_power_cmd("echo mem > /sys/power/state");
             break;
         }
     }
