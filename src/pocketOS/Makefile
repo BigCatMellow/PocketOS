@@ -9,7 +9,7 @@ CFLAGS  = -O2 -Wall -DPOCKETOS_ENABLE_AUDIO \
            -march=armv7ve \
            -I../../include -I../common
 
-LDFLAGS = -lSDL -lSDL_ttf -lSDL_image -lSDL_mixer -lm -lz -lsqlite3
+LDFLAGS = -L../../lib -lSDL -lSDL_ttf -lSDL_image -lSDL_mixer -lm -lz -lsqlite3
 
 all: $(TARGET)
 

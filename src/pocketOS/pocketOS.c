@@ -42,6 +42,7 @@ extern const char *sqlite3_errmsg(sqlite3 *);
 extern int sqlite3_prepare_v2(sqlite3 *db, const char *zSql, int nByte, sqlite3_stmt **ppStmt, const char **pzTail);
 extern int sqlite3_step(sqlite3_stmt *);
 extern const unsigned char *sqlite3_column_text(sqlite3_stmt *, int iCol);
+extern long long sqlite3_column_int64(sqlite3_stmt *, int iCol);
 extern int sqlite3_finalize(sqlite3_stmt *pStmt);
 #endif
 
@@ -89,6 +90,7 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #define HOME_ITEM_X  40
 #define HOME_ITEM_W  (SCREEN_W - 80)
 #define HEADER_H     36   /* settings section header row height */
+#define HOME_TAB_H   40   /* section tab strip height at top of home content */
 
 // ── Device paths ─────────────────────────────────────────────────────────────
 
@@ -146,8 +148,10 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 
 // ── Max items ────────────────────────────────────────────────────────────────
 
-#define MAX_SYSTEMS  64
-#define MAX_GAMES   4096
+#define MAX_SYSTEMS    64
+#define MAX_GAMES    1500
+#define MAX_RECENT    200
+#define MAX_FAVORITES 200
 
 // ── Colors (static helpers use COL macro after screen is init'd) ──────────────
 
@@ -176,7 +180,8 @@ static Uint32 C_SEL_HI, C_SEL_BORDER, C_PANEL_HI;
 // Retro cream/navy palette — see pocket_os_design_guide.md
 static SDL_Color SC_TEXT  = { 13,  28,  51, 255};  // dark navy #0D1C33
 static SDL_Color SC_WHITE = {244, 247, 251, 255};  // soft white #F4F7FB (bar text)
-static SDL_Color SC_DIM   = { 95, 102, 128, 255};  // muted #5F6680
+static SDL_Color SC_DIM     = { 95, 102, 128, 255};  // muted #5F6680
+static SDL_Color SC_SUB_SEL = {190, 195, 215, 255};  // muted white — subtitles on selection bg
 __attribute__((unused)) static SDL_Color SC_ARROW = {141, 126, 214, 255};  // lavender
 static SDL_Color SC_HDR   = { 13,  28,  51, 255};  // same as text for headers
 
@@ -196,21 +201,22 @@ typedef enum {
     STATE_BROWSE_CATS,
     STATE_BROWSE_GAMES,
     STATE_INFO_PANEL,
-    STATE_GAME_OPTIONS
+    STATE_GAME_OPTIONS,
 } State;
 
 static State state = STATE_HOME;
 static int   info_panel_about = 0;  /* 0 = device/miyoo info, 1 = pocket OS about */
-static int   home_sel    = 0;
-static int   home_offset = 0;
+static int home_section    = 0;       /* 0=BROWSE(default)  1=PLAY(incl. Library)  2=SYSTEM */
+static int home_sel_sec[3] = {0,0,0}; /* per-section cursor */
 
 // ── Data structures ───────────────────────────────────────────────────────────
 
 typedef struct {
-    char label[48];
-    char emu_dir[256];   // /mnt/SDCARD/Emu/GBA
-    char rom_dir[256];   // /mnt/SDCARD/Roms/GBA
-    char extlist[128];   // "gba|bin|zip|7z"
+    char    label[48];
+    char    emu_dir[256];   // /mnt/SDCARD/Emu/GBA
+    char    rom_dir[256];   // /mnt/SDCARD/Roms/GBA
+    char    extlist[128];   // "gba|bin|zip|7z"
+    time_t  rom_dir_mtime;  // mtime when game list was last loaded
 } System;
 
 typedef struct {
@@ -223,6 +229,7 @@ typedef struct {
     char rompath[512];
     char launch[512];
     char system[48];
+    int  play_secs;   // total play time in seconds; 0 = unknown/not applicable
 } PlayEntry;
 
 typedef struct {
@@ -235,7 +242,7 @@ typedef struct {
 
 #define BROWSE_GENRE_MAX   72
 #define BROWSE_GENRE_LEN   48
-#define BROWSE_GAME_MAX  4096
+#define BROWSE_GAME_MAX  2048
 
 typedef struct {
     char  title[240];
@@ -265,9 +272,10 @@ static int    sys_sel    = 0;
 static int    sys_offset = 0;
 
 static Game games[MAX_GAMES];
-static int  game_count  = 0;
-static int  game_sel    = 0;
-static int  game_offset = 0;
+static int  game_count    = 0;
+static int  game_sel      = 0;
+static int  game_offset   = 0;
+static int  games_sys_idx = -1;  /* which system's games are currently loaded */
 static int  game_opts_sel  = 0;   /* selected row in Game Options panel */
 static int  game_opts_mode = 0;   /* 0=menu, 1=rom_info, 2=save_info */
 static State game_opts_back = STATE_GAMES; /* which state to return to */
@@ -276,12 +284,12 @@ static char game_opts_path[512];
 static char game_opts_launch[512];
 static char game_opts_system[48];
 
-static PlayEntry recent_entries[MAX_GAMES];
+static PlayEntry recent_entries[MAX_RECENT];
 static int recent_count = 0;
 static int recent_sel = 0;
 static int recent_offset = 0;
 
-static PlayEntry favorite_entries[MAX_GAMES];
+static PlayEntry favorite_entries[MAX_FAVORITES];
 static int favorite_count = 0;
 static int favorite_sel = 0;
 static int favorite_offset = 0;
@@ -357,6 +365,11 @@ static SettingsEntry SETTINGS_ENTRIES[] = {
 static int settings_sel       = 0;
 static int settings_scroll_px = 0;  /* pixel offset for variable-height scroll */
 
+/* Settings value cache — populated on entry to settings, invalidated on write */
+static char settings_val_cache[SETTINGS_COUNT][64];
+static int  settings_num_cache[SETTINGS_COUNT];   /* numeric value for bar rendering */
+static int  settings_val_valid = 0;  /* 0 = stale, rebuild on next draw */
+
 // ── SDL globals ───────────────────────────────────────────────────────────────
 
 static SDL_Surface *video  = NULL;
@@ -386,19 +399,56 @@ typedef struct {
 static AssetCache asset_cache[128];
 static int asset_cache_count = 0;
 
+/* Text surface cache — avoids TTF_RenderUTF8_Blended alloc/free per draw_text call.
+   Key: font pointer + text string + packed color. LRU eviction at capacity. */
+#define TEXT_CACHE_MAX 128
+typedef struct {
+    TTF_Font    *font;
+    Uint32       color_key;   /* (r<<16)|(g<<8)|b */
+    char         text[128];
+    SDL_Surface *surface;
+    unsigned int last_use;    /* frame counter for LRU */
+} TextCache;
+static TextCache  text_cache[TEXT_CACHE_MAX];
+static int        text_cache_count = 0;
+static unsigned int text_cache_frame = 0;
+
 static int screenshot_combo_held = 0;
 static int screenshot_toast_frames = 0;  /* > 0 = show "Saved" toast */
 
-// ── Home menu ────────────────────────────────────────────────────────────────
+static int    g_dirty          = 1;   /* render needed this frame */
+static time_t g_last_input     = 0;   /* time() of last button press */
+static int    g_last_clock_min = -1;  /* last rendered clock minute */
+static int    g_batt_last      = -1;  /* last rendered battery level */
+static int    g_idle_dimmed       = 0;   /* 1 = backlight auto-dimmed, restore on input */
+static int    g_pre_dim_brightness = -1; /* brightness level saved before auto-dim */
 
-static const char *HOME_LABELS[] = {
-    "Favorites", "Recent", "Most Played", "Library", "Sleep", "Browse", "Apps", "Settings"
+static SDL_Surface *g_dim_overlay = NULL;  /* pre-built 60% darkened full-screen surface */
+
+// ── Home menu ────────────────────────────────────────────────────────────────
+// Three sections: [BROWSE(0, default, leftmost)] [PLAY(1, incl. Library)] [SYSTEM(2)]
+// L1/R1 cycle left/right through sections; Up/Down navigate within section.
+
+typedef struct { const char *label; const char *icon; int action; } HomeItem;
+
+/* action numbers match the original switch cases */
+static const HomeItem HOME_SEC0[] = {  /* BROWSE (special-cased, see draw_home_browse) */
+    { "Browse",    "browse.png",    3 },
 };
-static const char *HOME_ICONS[] = {
-    "favorites.png", "recent.png", "activity.png", "library.png", "sleep.png",
-    "browse.png",    "apps.png",   "settings.png"
+static const HomeItem HOME_SEC1[] = {  /* PLAY */
+    { "Most Played", "app_activity.png", 7 },
+    { "Library",     "library.png",      2 },
+    { "Recent",      "recent.png",       1 },
 };
-#define HOME_COUNT 8
+static const HomeItem HOME_SEC2[] = {  /* SYSTEM */
+    { "Apps",      "apps.png",     4 },
+    { "Settings",  "settings.png", 5 },
+    { "Sleep",     "sleep.png",    6 },
+};
+
+static const HomeItem *HOME_SECTIONS[3] = { HOME_SEC0, HOME_SEC1, HOME_SEC2 };
+static const int       HOME_SEC_COUNT[3] = { 1, 3, 3 };
+static const char     *HOME_SEC_NAME[3]  = { "BROWSE", "PLAY", "SYSTEM" };
 
 static AppEntry APP_ENTRIES[] = {
     { "Advanced Menu",   "tools.png",        "cd /mnt/SDCARD/App/AdvanceMENU; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
@@ -473,113 +523,6 @@ static void strip_ext(const char *filename, char *out, int outlen) {
     out[outlen - 1] = '\0';
     char *dot = strrchr(out, '.');
     if (dot) *dot = '\0';
-}
-
-static int is_numeric_token(const char *s) {
-    if (!s || !*s) return 0;
-    for (const char *p = s; *p; p++)
-        if (!isdigit((unsigned char)*p)) return 0;
-    return 1;
-}
-
-static void trim_display_name(char *s) {
-    if (!s) return;
-
-    char *start = s;
-    while (*start && isspace((unsigned char)*start)) start++;
-    if (start != s) memmove(s, start, strlen(start) + 1);
-
-    int len = (int)strlen(s);
-    while (len > 0 && isspace((unsigned char)s[len - 1])) s[--len] = '\0';
-}
-
-static void collapse_display_spaces(char *s) {
-    char *dst = s;
-    int in_space = 0;
-
-    for (char *src = s; *src; src++) {
-        if (isspace((unsigned char)*src)) {
-            if (!in_space) *dst++ = ' ';
-            in_space = 1;
-        } else {
-            *dst++ = *src;
-            in_space = 0;
-        }
-    }
-    *dst = '\0';
-    trim_display_name(s);
-}
-
-static void strip_bracket_tags(char *s, char open_ch, char close_ch) {
-    char *src = s;
-    char *dst = s;
-
-    while (*src) {
-        if (*src == open_ch) {
-            char *end = strchr(src + 1, close_ch);
-            if (end) {
-                src = end + 1;
-                if (dst > s && !isspace((unsigned char)dst[-1])) *dst++ = ' ';
-                continue;
-            }
-        }
-        *dst++ = *src++;
-    }
-    *dst = '\0';
-    collapse_display_spaces(s);
-}
-
-static char *token_start_before(char *s, char *end) {
-    while (end > s && isspace((unsigned char)end[-1])) end--;
-    while (end > s && !isspace((unsigned char)end[-1])) end--;
-    return end;
-}
-
-static void strip_trailing_date_tokens(char *s) {
-    for (;;) {
-        trim_display_name(s);
-        int len = (int)strlen(s);
-        if (len == 0) return;
-
-        char *last = token_start_before(s, s + len);
-        int last_len = (int)strlen(last);
-        if (is_numeric_token(last) && (last_len == 6 || last_len == 8)) {
-            if (last > s) last[-1] = '\0';
-            else *last = '\0';
-            continue;
-        }
-
-        char *second = token_start_before(s, last);
-        char *third = token_start_before(s, second);
-        if (third < second && second < last) {
-            char y[8], m[8], d[8];
-            snprintf(y, sizeof(y), "%.*s", (int)(second - third - 1), third);
-            snprintf(m, sizeof(m), "%.*s", (int)(last - second - 1), second);
-            snprintf(d, sizeof(d), "%s", last);
-            if (strlen(y) == 4 && strlen(m) <= 2 && strlen(d) <= 2 &&
-                is_numeric_token(y) && is_numeric_token(m) && is_numeric_token(d)) {
-                if (third > s) third[-1] = '\0';
-                else *third = '\0';
-                continue;
-            }
-        }
-        return;
-    }
-}
-
-static void clean_display_name(const char *src, char *dst, int dstlen) {
-    if (dstlen <= 0) return;
-
-    if (!src) src = "";
-    if (src != dst) {
-        strncpy(dst, src, dstlen - 1);
-        dst[dstlen - 1] = '\0';
-    }
-
-    strip_bracket_tags(dst, '(', ')');
-    strip_bracket_tags(dst, '[', ']');
-    strip_trailing_date_tokens(dst);
-    collapse_display_spaces(dst);
 }
 
 // ── Utility: tiny JSON string reader (no external dependency) ─────────────────
@@ -722,7 +665,7 @@ static int clampi(int value, int lo, int hi) {
 // Writes all four CSC values to mi_disp in one shot.
 // Reads current system.json for any field not being changed.
 static void apply_display_csc(void) {
-    int lum = json_int_file(POCKETOS_ROOT "/system.json", "lumination", 7);
+    int lum = json_int_file(POCKETOS_ROOT "/system.json", "lumination", 5);
     int hue = json_int_file(POCKETOS_ROOT "/system.json", "hue",        10);
     int sat = json_int_file(POCKETOS_ROOT "/system.json", "saturation", 10);
     int con = json_int_file(POCKETOS_ROOT "/system.json", "contrast",   10);
@@ -744,7 +687,9 @@ static void apply_display_csc(void) {
 static void apply_brightness(int brightness) {
     brightness = clampi(brightness, 0, 10);
     set_json_int_file(POCKETOS_ROOT "/system.json", "brightness", brightness);
-    int raw = (int)round(3.0 * exp(0.350656 * brightness));
+    /* Pre-computed lookup — avoids expf() glibc version dependency */
+    static const int brt_lut[11] = {3,4,6,9,12,17,25,35,50,70,100};
+    int raw = brt_lut[brightness];
     FILE *f = fopen("/sys/devices/soc0/soc/1f003400.pwm/pwm/pwmchip0/pwm0/duty_cycle", "w");
     if (f) {
         fprintf(f, "%d", raw);
@@ -854,53 +799,63 @@ static void system_from_launch(const char *launch, char *out, int outlen) {
 // ── Battery level ─────────────────────────────────────────────────────────────
 
 static int read_battery(void) {
+    static int    cached    = -1;
+    static time_t cached_ts = 0;
+    time_t now = time(NULL);
+    if (cached >= 0 && now - cached_ts < 5) return cached;
+
+    int result = -1;
+
     const char *tmp_paths[] = {
         "/tmp/percBat",
         "/tmp/.percBat",
         NULL
     };
-    for (int i = 0; tmp_paths[i]; i++) {
+    for (int i = 0; tmp_paths[i] && result < 0; i++) {
         FILE *f = fopen(tmp_paths[i], "r");
         if (f) {
             int v = -1;
             if (fscanf(f, "%d", &v) == 1) {
-                fclose(f);
-                if (v == 500) return 100;
-                if (v >= 0 && v <= 100) return v;
-            } else {
+                if (v == 500) result = 100;
+                else if (v >= 0 && v <= 100) result = v;
+            }
+            fclose(f);
+        }
+    }
+
+    if (result < 0) {
+        FILE *axp = fopen("/tmp/.axp_result", "r");
+        if (axp) {
+            char buf[128];
+            int v = -1;
+            int n = (int)fread(buf, 1, sizeof(buf) - 1, axp);
+            fclose(axp);
+            buf[n] = '\0';
+            if (sscanf(buf, "{\"battery\":%d", &v) == 1) {
+                if (v == 500) result = 100;
+                else if (v >= 0 && v <= 100) result = v;
+            }
+        }
+    }
+
+    if (result < 0) {
+        const char *paths[] = {
+            "/sys/class/power_supply/axp20x-battery/capacity",
+            "/sys/class/power_supply/battery/capacity",
+            NULL
+        };
+        for (int i = 0; paths[i] && result < 0; i++) {
+            FILE *f = fopen(paths[i], "r");
+            if (f) {
+                int v = -1;
+                if (fscanf(f, "%d", &v) == 1 && v >= 0 && v <= 100) result = v;
                 fclose(f);
             }
         }
     }
 
-    FILE *axp = fopen("/tmp/.axp_result", "r");
-    if (axp) {
-        char buf[128];
-        int v = -1;
-        int n = (int)fread(buf, 1, sizeof(buf) - 1, axp);
-        fclose(axp);
-        buf[n] = '\0';
-        if (sscanf(buf, "{\"battery\":%d", &v) == 1) {
-            if (v == 500) return 100;
-            if (v >= 0 && v <= 100) return v;
-        }
-    }
-
-    const char *paths[] = {
-        "/sys/class/power_supply/axp20x-battery/capacity",
-        "/sys/class/power_supply/battery/capacity",
-        NULL
-    };
-    for (int i = 0; paths[i]; i++) {
-        FILE *f = fopen(paths[i], "r");
-        if (f) {
-            int v = -1;
-            int ok = fscanf(f, "%d", &v);
-            fclose(f);
-            if (ok == 1 && v >= 0 && v <= 100) return v;
-        }
-    }
-    return -1;
+    if (result >= 0) { cached = result; cached_ts = now; }
+    return result;
 }
 
 static void settings_value(const SettingsEntry *entry, char *out, int outlen) {
@@ -1050,14 +1005,12 @@ static void log_msg(const char *msg) {
     if (!g_log_fp) return;
     log_timestamp(g_log_fp);
     fprintf(g_log_fp, "%s\n", msg);
-    fflush(g_log_fp);
 }
 
 static void log_kv(const char *key, const char *value) {
     if (!g_log_fp) return;
     log_timestamp(g_log_fp);
     fprintf(g_log_fp, "%s: %s\n", key, value ? value : "(null)");
-    fflush(g_log_fp);
 }
 
 static void log_int(const char *key, int value) {
@@ -1071,7 +1024,7 @@ static void log_errno_msg(const char *context, const char *path) {
     log_timestamp(g_log_fp);
     fprintf(g_log_fp, "ERROR %s: path=%s  errno=%d (%s)\n",
             context, path ? path : "", errno, strerror(errno));
-    fflush(g_log_fp);
+    fflush(g_log_fp);  /* flush errors immediately so they survive a crash */
 }
 
 static void log_file_state(const char *label, const char *path) {
@@ -1084,14 +1037,13 @@ static void log_file_state(const char *label, const char *path) {
     else
         fprintf(g_log_fp, "%s: %s  [MISSING errno=%d %s]\n",
                 label, path, errno, strerror(errno));
-    fflush(g_log_fp);
 }
 
 static void log_sdl_error(const char *context) {
     if (!g_log_fp) return;
     log_timestamp(g_log_fp);
     fprintf(g_log_fp, "SDL ERROR %s: %s\n", context, SDL_GetError());
-    fflush(g_log_fp);
+    fflush(g_log_fp);  /* flush errors immediately so they survive a crash */
 }
 
 /* Signal handler — logs the signal then re-raises so the OS still gets it */
@@ -1118,19 +1070,18 @@ static void sig_handler(int sig) {
 }
 
 static void log_open(void) {
-    /* Rotate if log is too large */
+    /* Logging is opt-in: only activate if the log file already exists.
+       To enable: touch /mnt/SDCARD/.tmp_update/logs/pocketos_debug.log
+       To disable: delete that file. */
     struct stat st;
-    if (stat(LOG_PATH, &st) == 0 && st.st_size > LOG_MAX_BYTES) {
+    if (stat(LOG_PATH, &st) != 0) return;
+
+    /* Rotate if log is too large */
+    if (st.st_size > LOG_MAX_BYTES) {
         char old[256];
         snprintf(old, sizeof(old), "%s.old", LOG_PATH);
         rename(LOG_PATH, old);
     }
-
-    /* Ensure log directory exists */
-    char dir[256];
-    snprintf(dir, sizeof(dir), "%s", LOG_PATH);
-    char *slash = strrchr(dir, '/');
-    if (slash) { *slash = '\0'; mkdir(dir, 0755); }
 
     g_log_fp = fopen(LOG_PATH, "a");
     if (!g_log_fp) return;
@@ -1182,20 +1133,20 @@ static void log_timer_end(LogTimer lt) {
 /* State names for readable state-transition logging */
 static const char *state_name(int s) {
     switch (s) {
-        case STATE_HOME:        return "HOME";
-        case STATE_SYSTEMS:     return "SYSTEMS";
-        case STATE_GAMES:       return "GAMES";
-        case STATE_RECENT:      return "RECENT";
-        case STATE_FAVORITES:   return "FAVORITES";
-        case STATE_MOST_PLAYED: return "MOST_PLAYED";
-        case STATE_APPS:        return "APPS";
-        case STATE_SETTINGS:    return "SETTINGS";
-        case STATE_FONT_PICKER: return "FONT_PICKER";
-        case STATE_THEME_PICKER:return "THEME_PICKER";
-        case STATE_BROWSE_CATS: return "BROWSE_CATS";
-        case STATE_BROWSE_GAMES:return "BROWSE_GAMES";
-        case STATE_INFO_PANEL:  return "INFO_PANEL";
-        case STATE_GAME_OPTIONS:return "GAME_OPTIONS";
+        case STATE_HOME:         return "HOME";
+        case STATE_SYSTEMS:      return "SYSTEMS";
+        case STATE_GAMES:        return "GAMES";
+        case STATE_RECENT:       return "RECENT";
+        case STATE_FAVORITES:    return "FAVORITES";
+        case STATE_MOST_PLAYED:  return "MOST_PLAYED";
+        case STATE_APPS:         return "APPS";
+        case STATE_SETTINGS:     return "SETTINGS";
+        case STATE_FONT_PICKER:  return "FONT_PICKER";
+        case STATE_THEME_PICKER: return "THEME_PICKER";
+        case STATE_BROWSE_CATS:  return "BROWSE_CATS";
+        case STATE_BROWSE_GAMES: return "BROWSE_GAMES";
+        case STATE_INFO_PANEL:   return "INFO_PANEL";
+        case STATE_GAME_OPTIONS: return "GAME_OPTIONS";
         default: return "UNKNOWN";
     }
 }
@@ -1248,7 +1199,7 @@ static void init_audio(void) {
         log_kv("SDL audio init failed", SDL_GetError());
         return;
     }
-    if (Mix_OpenAudio(44100, AUDIO_S16SYS, 2, 1024) != 0) {
+    if (Mix_OpenAudio(22050, AUDIO_S16SYS, 1, 1024) != 0) {
         log_kv("Mix_OpenAudio failed", SDL_GetError());
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         return;
@@ -1624,12 +1575,27 @@ static void load_systems(void) {
 // ── Load games for selected system ───────────────────────────────────────────
 
 static void load_games(int idx) {
+    if (idx < 0 || idx >= sys_count) {
+        game_count = 0; game_sel = 0; game_offset = 0;
+        games_sys_idx = -1;
+        return;
+    }
+
+    System *sys = &systems[idx];
+
+    /* Skip reload if same system and ROM directory hasn't changed */
+    struct stat rom_st;
+    time_t cur_mtime = (stat(sys->rom_dir, &rom_st) == 0) ? rom_st.st_mtime : 0;
+    if (idx == games_sys_idx && cur_mtime == sys->rom_dir_mtime) {
+        game_sel    = 0;
+        game_offset = 0;
+        return;
+    }
+
     game_count  = 0;
     game_sel    = 0;
     game_offset = 0;
 
-    if (idx < 0 || idx >= sys_count) return;
-    System *sys = &systems[idx];
     log_kv("load_games system", sys->label);
     log_kv("load_games rom_dir", sys->rom_dir);
     log_kv("load_games extlist", sys->extlist);
@@ -1656,7 +1622,6 @@ static void load_games(int idx) {
 
         char display[240];
         strip_ext(ent->d_name, display, sizeof(display));
-        clean_display_name(display, display, sizeof(display));
 
         Game *g = &games[game_count++];
         strncpy(g->name, display,  sizeof(g->name) - 1);
@@ -1665,6 +1630,9 @@ static void load_games(int idx) {
 
     closedir(d);
     qsort(games, game_count, sizeof(Game), cmp_game);
+
+    sys->rom_dir_mtime = cur_mtime;
+    games_sys_idx = idx;
 
     char msg[64];
     snprintf(msg, sizeof(msg), "load_games count=%d", game_count);
@@ -1681,13 +1649,14 @@ static void load_play_entries(const char *path, PlayEntry *entries, int *count, 
     }
 
     char line[2048];
-    while (fgets(line, sizeof(line), f) && *count < MAX_GAMES) {
+    int max_count = (entries == recent_entries)   ? MAX_RECENT    :
+                    (entries == favorite_entries) ? MAX_FAVORITES : MAX_GAMES;
+    while (fgets(line, sizeof(line), f) && *count < max_count) {
         PlayEntry *e = &entries[*count];
         memset(e, 0, sizeof(*e));
         if (!json_str_from_buf(line, "label", e->label, sizeof(e->label))) continue;
         if (!json_str_from_buf(line, "rompath", e->rompath, sizeof(e->rompath))) continue;
         if (!json_str_from_buf(line, "launch", e->launch, sizeof(e->launch))) continue;
-        clean_display_name(e->label, e->label, sizeof(e->label));
         system_from_launch(e->launch, e->system, sizeof(e->system));
         (*count)++;
     }
@@ -1753,15 +1722,17 @@ static void load_most_played(void) {
     }
 
     while (sqlite3_step(stmt) == SQLITE_ROW && most_played_count < MAX_GAMES) {
-        const char *name = (const char *)sqlite3_column_text(stmt, 0);
+        const char *name  = (const char *)sqlite3_column_text(stmt, 0);
         const char *fpath = (const char *)sqlite3_column_text(stmt, 1);
-        const char *sys = (const char *)sqlite3_column_text(stmt, 2);
+        const char *sys   = (const char *)sqlite3_column_text(stmt, 2);
+        long long   secs  = sqlite3_column_int64(stmt, 3);
         if (!name || !fpath) continue;
 
         PlayEntry *e = &most_played_entries[most_played_count];
         memset(e, 0, sizeof(*e));
+        e->play_secs = (int)secs;
 
-        clean_display_name(name, e->label, sizeof(e->label));
+        strncpy(e->label, name, sizeof(e->label) - 1);
 
         const char *rel_path = fpath;
         if (strncmp(rel_path, ROMS_ROOT "/", strlen(ROMS_ROOT) + 1) == 0)
@@ -1819,7 +1790,7 @@ static void toggle_favorite(const char *label, const char *rompath, const char *
         favorite_count--;
     } else {
         /* Add */
-        if (favorite_count < MAX_GAMES) {
+        if (favorite_count < MAX_FAVORITES) {
             PlayEntry *e = &favorite_entries[favorite_count++];
             memset(e, 0, sizeof(*e));
             strncpy(e->label,   label,   sizeof(e->label)   - 1);
@@ -1982,6 +1953,7 @@ static void open_settings_kind(const char *kind) {
     int max_scroll = total_settings_height() - CONTENT_H;
     if (max_scroll < 0) max_scroll = 0;
     if (settings_scroll_px > max_scroll) settings_scroll_px = max_scroll;
+    settings_val_valid = 0;
     state = STATE_SETTINGS;
 }
 
@@ -1997,12 +1969,12 @@ static void adjust_setting(int delta) {
     if (SETTINGS_ENTRIES[settings_sel].is_header) return;
     const char *k = SETTINGS_ENTRIES[settings_sel].kind;
     if (strcmp(k, "brightness") == 0) {
-        int v = json_int_file(POCKETOS_ROOT "/system.json", "brightness", 7);
+        int v = json_int_file(POCKETOS_ROOT "/system.json", "brightness", 6);
         if (delta == 0) delta = 1;
         apply_brightness(v + delta);
         play_select();
     } else if (strcmp(k, "lumination") == 0) {
-        adjust_csc_field("lumination", 0, 20, 7, delta == 0 ? 1 : delta);
+        adjust_csc_field("lumination", 0, 20, 5, delta == 0 ? 1 : delta);
         play_select();
     } else if (strcmp(k, "saturation") == 0) {
         adjust_csc_field("saturation", 0, 20, 10, delta == 0 ? 1 : delta);
@@ -2086,6 +2058,7 @@ static void adjust_setting(int delta) {
     } else {
         play_select();
     }
+    settings_val_valid = 0;  /* any adjustment invalidates cached display values */
 }
 
 // ── Drawing helpers ───────────────────────────────────────────────────────────
@@ -2186,8 +2159,8 @@ static int setting_max_val(const char *k) {
 
 // Returns current raw value for numeric settings.
 static int setting_cur_val(const char *k) {
-    if (strcmp(k, "brightness")  == 0) return json_int_file(POCKETOS_ROOT "/system.json", "brightness",  7);
-    if (strcmp(k, "lumination")  == 0) return json_int_file(POCKETOS_ROOT "/system.json", "lumination",  7);
+    if (strcmp(k, "brightness")  == 0) return json_int_file(POCKETOS_ROOT "/system.json", "brightness",  6);
+    if (strcmp(k, "lumination")  == 0) return json_int_file(POCKETOS_ROOT "/system.json", "lumination",  5);
     if (strcmp(k, "saturation")  == 0) return json_int_file(POCKETOS_ROOT "/system.json", "saturation", 10);
     if (strcmp(k, "hue")         == 0) return json_int_file(POCKETOS_ROOT "/system.json", "hue",        10);
     if (strcmp(k, "contrast")    == 0) return json_int_file(POCKETOS_ROOT "/system.json", "contrast",   10);
@@ -2200,17 +2173,69 @@ static int setting_cur_val(const char *k) {
 
 static void draw_text(TTF_Font *font, const char *text, int x, int y, SDL_Color col) {
     if (!text || text[0] == '\0') return;
-    SDL_Surface *s = TTF_RenderUTF8_Blended(font, text, col);
-    if (!s) return;
+
+    text_cache_frame++;
+    Uint32 ck = ((Uint32)col.r << 16) | ((Uint32)col.g << 8) | col.b;
+
+    /* Look for a cached surface */
+    SDL_Surface *s = NULL;
+    int slot = -1;
+    for (int i = 0; i < text_cache_count; i++) {
+        if (text_cache[i].font == font &&
+            text_cache[i].color_key == ck &&
+            strncmp(text_cache[i].text, text, sizeof(text_cache[i].text) - 1) == 0) {
+            text_cache[i].last_use = text_cache_frame;
+            s = text_cache[i].surface;
+            slot = i;
+            break;
+        }
+    }
+
+    if (!s) {
+        /* Miss — render and cache */
+        s = TTF_RenderUTF8_Blended(font, text, col);
+        if (!s) return;
+
+        if (text_cache_count < TEXT_CACHE_MAX) {
+            slot = text_cache_count++;
+        } else {
+            /* Evict LRU slot */
+            unsigned int oldest = text_cache[0].last_use;
+            slot = 0;
+            for (int i = 1; i < TEXT_CACHE_MAX; i++) {
+                if (text_cache[i].last_use < oldest) {
+                    oldest = text_cache[i].last_use;
+                    slot = i;
+                }
+            }
+            SDL_FreeSurface(text_cache[slot].surface);
+        }
+        text_cache[slot].font = font;
+        text_cache[slot].color_key = ck;
+        strncpy(text_cache[slot].text, text, sizeof(text_cache[slot].text) - 1);
+        text_cache[slot].text[sizeof(text_cache[slot].text) - 1] = '\0';
+        text_cache[slot].surface  = s;
+        text_cache[slot].last_use = text_cache_frame;
+    }
+
     SDL_Rect dst = { x, y, 0, 0 };
     SDL_BlitSurface(s, NULL, screen, &dst);
-    SDL_FreeSurface(s);
 }
 
 static int text_w(TTF_Font *font, const char *text) {
     int w = 0;
     TTF_SizeUTF8(font, text, &w, NULL);
     return w;
+}
+
+/* Formats seconds as "12h 34m" / "34m" / "<1m" into out. */
+static void format_playtime(int secs, char *out, int outlen) {
+    if (secs < 60) { snprintf(out, outlen, "<1m"); return; }
+    int mins = secs / 60;
+    int hrs  = mins / 60;
+    mins %= 60;
+    if (hrs > 0) snprintf(out, outlen, "%dh %dm", hrs, mins);
+    else         snprintf(out, outlen, "%dm", mins);
 }
 
 static void draw_text_center(TTF_Font *font, const char *text,
@@ -2361,18 +2386,17 @@ static void draw_scrollbar(int x, int y, int h, int total, int visible, int offs
     fill_rrect(x, thumb_y, 4, thumb_h, 2, C_SEL_BORDER);
 }
 
-// Unified dark navy for all icons — silhouette-first per design guide.
-// Per-category rainbow colors conflicted with the retro handheld aesthetic.
+// Icons follow SC_TEXT so they adapt to any theme automatically.
 static Uint32 icon_accent(const char *name) {
     (void)name;
-    return RGBA(0x0D, 0x1C, 0x33);  // #0D1C33 dark navy — same as SC_TEXT
+    return RGBA(SC_TEXT.r, SC_TEXT.g, SC_TEXT.b);
 }
 
 static void draw_builtin_icon(const char *name, int x, int y, int w, int h, int selected) {
     // Retro silhouette: no colored bg square, just the symbol on the surface.
     // On cream: per-category accent color. On lavender (selected): dark navy.
     // bg punches "holes" (ring cutouts etc.) using the current surface bg.
-    Uint32 sym = selected ? RGBA(0x0D, 0x1C, 0x33) : icon_accent(name);
+    Uint32 sym = selected ? RGBA(SC_WHITE.r, SC_WHITE.g, SC_WHITE.b) : icon_accent(name);
     Uint32 bg  = selected ? C_SEL : C_BG;
 
     // Symbol drawn in the inner 60% of the cell (no pad for bg square)
@@ -2486,7 +2510,7 @@ static void draw_builtin_icon(const char *name, int x, int y, int w, int h, int 
 __attribute__((unused))
 static void draw_button_hint(const char *asset, const char *label, const char *text, int x, int y) {
     if (!draw_asset(asset, x, y, 30, 30)) {
-        fill_rrect(x + 2, y + 2, 26, 26, 5, RGBA(79, 70, 150));
+        fill_rrect(x + 2, y + 2, 26, 26, 5, C_SEL);
         draw_text(font_small, label, x + 10, y + 6, SC_WHITE);
     }
     draw_text(font_small, text, x + 38, y + 7, SC_TEXT);
@@ -2564,8 +2588,10 @@ static void draw_status(void) {
 
     // Center: clock — localtime() uses TZ env set from Onion's config/.tz at startup
     time_t t = time(NULL);
-    int utc_off = json_int_file(POCKETOS_ROOT "/system.json", "utcoffset", 0);
-    if (utc_off) t += utc_off * 3600;  // manual fine-tune on top of auto TZ
+    static int utc_off_cache = 0;
+    static time_t utc_off_last = 0;
+    if (t - utc_off_last > 30) { utc_off_cache = json_int_file(POCKETOS_ROOT "/system.json", "utcoffset", 0); utc_off_last = t; }
+    if (utc_off_cache) t += utc_off_cache * 3600;  // manual fine-tune on top of auto TZ
     struct tm *tm = localtime(&t);
     char clk[16];
     snprintf(clk, sizeof(clk), "%02d:%02d", tm->tm_hour, tm->tm_min);
@@ -2576,20 +2602,32 @@ static void draw_status(void) {
     char bstr[16];
     if (batt >= 0) snprintf(bstr, sizeof(bstr), "%d%%", batt);
     else           snprintf(bstr, sizeof(bstr), "--%%");
-    SDL_Color batt_col = {0x8F, 0xD4, 0x6A, 255};  // #8FD46A battery green
+    SDL_Color batt_col;
+    if      (batt < 0)   batt_col = SC_DIM;                                         // unknown
+    else if (batt > 60)  batt_col = (SDL_Color){0x47, 0x83, 0x3c, 255};            // green
+    else if (batt > 30)  batt_col = (SDL_Color){0x97, 0x82, 0x29, 255};            // yellow
+    else                 batt_col = (SDL_Color){0x82, 0x27, 0x27, 255};            // red
     int bw_str = text_w(font_body, bstr);
     draw_text(font_body, bstr, SCREEN_W - bw_str - 10, mid_y, batt_col);
 }
 
 // ── Hint bar ──────────────────────────────────────────────────────────────────
 
-// Hint bar background — navy gradient (reverse of status bar)
+// Hint bar background — derives from C_BAR so any theme auto-adapts.
 static void draw_hint_base(void) {
     int y = SCREEN_H - HINT_H;
-    // Gradient: lighter navy at top, deeper navy at bottom
-    fill_rect(0, y,            SCREEN_W, HINT_H / 2, RGBA(0x10, 0x28, 0x46));
-    fill_rect(0, y + HINT_H/2, SCREEN_W, HINT_H - HINT_H/2, RGBA(0x07, 0x1A, 0x33));
-    fill_rect(0, y, SCREEN_W, 1, RGBA(0x28, 0x41, 0x5F));  // top border
+    Uint8 r0, g0, b0;
+    SDL_GetRGB(C_BAR, screen->format, &r0, &g0, &b0);
+    // Slightly lighter at top, base at bottom, accent border line
+    Uint8 r1 = (Uint8)(r0 + (255-r0)*18/255);
+    Uint8 g1 = (Uint8)(g0 + (255-g0)*18/255);
+    Uint8 b1 = (Uint8)(b0 + (255-b0)*18/255);
+    Uint8 r2 = (Uint8)(r0 + (255-r0)*38/255);
+    Uint8 g2 = (Uint8)(g0 + (255-g0)*38/255);
+    Uint8 b2 = (Uint8)(b0 + (255-b0)*38/255);
+    fill_rect(0, y,            SCREEN_W, HINT_H / 2, RGBA(r1, g1, b1));
+    fill_rect(0, y + HINT_H/2, SCREEN_W, HINT_H - HINT_H/2, C_BAR);
+    fill_rect(0, y, SCREEN_W, 1, RGBA(r2, g2, b2));  // top border
 }
 
 // Draws button hints across the footer bar.
@@ -2607,8 +2645,8 @@ static void draw_hints_row(const char *al, const char *bl,
     Uint32 ca_bg  = RGBA(0x4F, 0xA8, 0x5E), ca_bd = RGBA(0xBF, 0xE6, 0xB9);
     // B: red-maroon #B84E54, border #E6B2B2
     Uint32 cb_bg  = RGBA(0xB8, 0x4E, 0x54), cb_bd = RGBA(0xE6, 0xB2, 0xB2);
-    // L/R: gray #4B5568, border #AEB7C5
-    Uint32 clr_bg = RGBA(0x4B, 0x55, 0x68), clr_bd = RGBA(0xAE, 0xB7, 0xC5);
+    // L/R: follow selection theme colors
+    Uint32 clr_bg = C_SEL, clr_bd = C_SEL_BORDER;
 
     int x = 16;
     int icon_h = HINT_H - 8;
@@ -2693,18 +2731,21 @@ static void draw_hints(const char *text) {
     draw_hints_row("Select", "Back", "L", "R", "Page", NULL, NULL);
 }
 
+
 static void draw_home_hints(void) {
     draw_hint_base();
-    draw_hints_row("Select", "Back", NULL, NULL, NULL, NULL, NULL);
-    // Right side: d-pad up/down hint using PNG asset if available
+    /* L/R bumpers cycle sections; show the neighbour names as labels */
+    const char *l_sec = HOME_SEC_NAME[(home_section + 2) % 3];
+    const char *r_sec = HOME_SEC_NAME[(home_section + 1) % 3];
+    draw_hints_row("Select", NULL, l_sec, r_sec, "Section", NULL, NULL);
+    /* Right side: d-pad up/down hint */
     int hy = SCREEN_H - HINT_H;
     int ty = hy + (HINT_H - 16) / 2;
     int ax = SCREEN_W - 160;
     int icon_sz = HINT_H - 8;
     if (!draw_asset("xbox_dpad.png", ax, hy + 4, icon_sz, icon_sz)) {
-        // Fallback: pixel-art up/down arrows
-        Uint32 c_lr = RGBA(0x4B, 0x55, 0x68);
-        Uint32 c_bd = RGBA(0xAE, 0xB7, 0xC5);
+        Uint32 c_lr = C_SEL;
+        Uint32 c_bd = C_SEL_BORDER;
         int ay = hy + (HINT_H - 22) / 2;
         draw_shoulder_pill(ax, ay,      22, 11, c_bd, c_lr, "U");
         draw_shoulder_pill(ax, ay + 12, 22, 11, c_bd, c_lr, "D");
@@ -2712,39 +2753,155 @@ static void draw_home_hints(void) {
     draw_text(font_small, "Navigate", ax + icon_sz + 6, ty, SC_WHITE);
 }
 
+// ── Home browse (section 0 — full-width genre list) ──────────────────────────
+
+static void draw_home_browse(int list_y, int avail) {
+    if (!browse_genre_count) {
+        draw_text(font_body, "No genre data found.", 24, list_y + 24, SC_DIM);
+        draw_text(font_body, "Run the PocketOS Genre Scanner on your computer,", 24, list_y + 52, SC_DIM);
+        draw_text(font_body, "then point it at this SD card.", 24, list_y + 76, SC_DIM);
+        return;
+    }
+
+    int rows = avail / ITEM_H;
+
+    /* Clamp scroll */
+    if (browse_genre_sel < browse_genre_off) browse_genre_off = browse_genre_sel;
+    if (browse_genre_sel >= browse_genre_off + rows) browse_genre_off = browse_genre_sel - rows + 1;
+
+    for (int i = 0; i < rows && browse_genre_off + i < browse_genre_count; i++) {
+        int gi     = browse_genre_off + i;
+        int iy     = list_y + i * ITEM_H;
+        int is_sel = (gi == browse_genre_sel);
+
+        if (is_sel) {
+            draw_select_asset(6, iy + 3, SCREEN_W - 20, ITEM_H - 6);
+            fill_rect(6, iy + 9, 4, ITEM_H - 18, C_SEL_BORDER);
+        } else {
+            fill_rect(24, iy + ITEM_H - 1, SCREEN_W - 48, 1, C_SEP);
+        }
+
+        SDL_Color tc  = is_sel ? SC_WHITE   : SC_TEXT;
+        SDL_Color lbc = is_sel ? SC_SUB_SEL : SC_DIM;
+
+        draw_text(font_body, browse_genres[gi].label,
+                  24, iy + (ITEM_H - 22) / 2, tc);
+
+        char cnt[16];
+        snprintf(cnt, sizeof(cnt), "%d", browse_genres[gi].count);
+        int lw = text_w(font_small, cnt);
+        draw_text(font_small, cnt,
+                  SCREEN_W - 50 - lw, iy + (ITEM_H - 18) / 2, lbc);
+
+        Uint32 chev = is_sel ? RGBA(SC_WHITE.r, SC_WHITE.g, SC_WHITE.b) : C_SEP;
+        draw_chevron(SCREEN_W - 32, iy + ITEM_H / 2, 8, 2, chev);
+    }
+
+    draw_scrollbar(SCREEN_W - 14, list_y, rows * ITEM_H, browse_genre_count, rows, browse_genre_off);
+}
+
 // ── Home screen ───────────────────────────────────────────────────────────────
+
+static const char *home_item_subtitle(int action) {
+    static char buf[64];
+    switch (action) {
+    case 1:
+        if (recent_count == 0) return "nothing played yet";
+        snprintf(buf, sizeof(buf), "%d recently played", recent_count);
+        return buf;
+    case 2:
+        snprintf(buf, sizeof(buf), "%d system%s", sys_count, sys_count == 1 ? "" : "s");
+        return buf;
+    case 3:
+        return "explore by genre";
+    case 7:
+        if (most_played_count == 0) return "no play data yet";
+        snprintf(buf, sizeof(buf), "%d game%s", most_played_count, most_played_count == 1 ? "" : "s");
+        return buf;
+    default:
+        return NULL;
+    }
+}
 
 static void draw_home(void) {
     draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
     draw_status();
     draw_home_hints();
 
-    int visible = HOME_VISIBLE;
-
-    for (int row = 0; row < visible && home_offset + row < HOME_COUNT; row++) {
-        int i   = home_offset + row;
-        int iy  = CONTENT_Y + row * HOME_ITEM_H;
-        int sel = (i == home_sel);
-
-        if (sel) {
-            draw_select_asset(6, iy + 3, SCREEN_W - 20, HOME_ITEM_H - 6);
+    // ── Section tab strip ─────────────────────────────────────────────────────
+    {
+        int tw = SCREEN_W / 3;
+        for (int i = 0; i < 3; i++) {
+            int tx     = i * tw;
+            int active = (i == home_section);
+            if (active) {
+                fill_rect(tx, CONTENT_Y, tw, HOME_TAB_H, C_PANEL_HI);
+                fill_rect(tx + 2, CONTENT_Y + HOME_TAB_H - 3, tw - 4, 3, C_SEL);
+            }
+            SDL_Color tc = active ? SC_HDR : SC_DIM;
+            draw_text_center(font_small, HOME_SEC_NAME[i],
+                             tx, tw, CONTENT_Y + (HOME_TAB_H - 18) / 2, tc);
         }
-        if (!sel) {
-            fill_rect(12, iy + HOME_ITEM_H - 1, SCREEN_W - 24, 1, C_SEP);
-        }
-
-        if (!draw_asset(HOME_ICONS[i], 14, iy + (HOME_ITEM_H - 82) / 2, 82, 82)) {
-            draw_builtin_icon(HOME_ICONS[i], 14, iy + (HOME_ITEM_H - 82) / 2, 82, 82, sel);
-        }
-
-        draw_text(font_large, HOME_LABELS[i], 110, iy + (HOME_ITEM_H - 30) / 2, SC_TEXT);
-
-        Uint32 chev_col = sel ? RGBA(0x3D, 0x2C, 0x88) : RGBA(0x5F, 0x66, 0x80);
-        draw_chevron(SCREEN_W - 32, iy + HOME_ITEM_H / 2, 8, 2, chev_col);
+        fill_rect(0, CONTENT_Y + HOME_TAB_H - 1, SCREEN_W, 1, C_DIVIDER);
     }
 
-    draw_scrollbar(SCREEN_W - 10, CONTENT_Y + 8, CONTENT_H - 16,
-                   HOME_COUNT, visible, home_offset);
+    // ── Section content ───────────────────────────────────────────────────────
+    int avail_c = CONTENT_H - HOME_TAB_H;
+    int list_y  = CONTENT_Y + HOME_TAB_H;
+
+    if (home_section == 0) {
+        draw_home_browse(list_y, avail_c);
+        return;
+    }
+
+    // ── Item list — height fills the section, centered when fewer items ────────
+    const HomeItem *items  = HOME_SECTIONS[home_section];
+    int             count  = HOME_SEC_COUNT[home_section];
+    int             sel    = home_sel_sec[home_section];
+    int             item_h = count > 0 ? avail_c / count : avail_c;
+    if (item_h > 160) item_h = 160;
+    int             total  = item_h * count;
+    int             base_y = list_y + (avail_c - total) / 2;
+
+    /* Icon and text metrics derived from row height */
+    int icon_sz = item_h - 24;
+    if (icon_sz > 110) icon_sz = 110;
+    int text_x  = 18 + icon_sz + 8;
+
+    for (int row = 0; row < count; row++) {
+        int iy     = base_y + row * item_h;
+        int is_sel = (row == sel);
+
+        if (is_sel) {
+            draw_select_asset(6, iy + 3, SCREEN_W - 20, item_h - 6);
+            /* Left accent bar — drawn over the selection highlight's straight left edge */
+            fill_rect(6, iy + 9, 4, item_h - 18, C_SEL_BORDER);
+        } else {
+            fill_rect(text_x, iy + item_h - 1, SCREEN_W - text_x - 20, 1, C_SEP);
+        }
+
+        int icon_y = iy + (item_h - icon_sz) / 2;
+        if (!draw_asset(items[row].icon, 14, icon_y, icon_sz, icon_sz))
+            draw_builtin_icon(items[row].icon, 14, icon_y, icon_sz, icon_sz, is_sel);
+
+        const char *sub     = home_item_subtitle(items[row].action);
+        int         label_h = 30;
+        int         sub_h   = sub ? 20 : 0;
+        int         gap     = sub ? 4  : 0;
+        int         block_h = label_h + gap + sub_h;
+        int         block_y = iy + (item_h - block_h) / 2;
+
+        draw_text(font_large, items[row].label, text_x, block_y,
+                  is_sel ? SC_WHITE : SC_TEXT);
+        if (sub)
+            draw_text(font_small, sub, text_x + 2, block_y + label_h + gap,
+                      is_sel ? SC_SUB_SEL : SC_DIM);
+
+        Uint32 chev_col = is_sel ? RGBA(SC_WHITE.r, SC_WHITE.g, SC_WHITE.b) : C_SEP;
+        draw_chevron(SCREEN_W - 32, iy + item_h / 2, 10, 2, chev_col);
+    }
+
+    /* Dead space below items (1-item sections): could add content here */
 }
 
 // ── Two-panel (systems + games) ───────────────────────────────────────────────
@@ -2782,15 +2939,14 @@ static void draw_panel(void) {
         if (sel) draw_select_asset(10, iy + 4, LEFT_W - 18, ITEM_H - 8);
         else fill_rect(10, iy + ITEM_H - 1, LEFT_W - 18, 1, C_SEP);
 
-        // Both cream and lavender are light — always use dark navy text
-        SDL_Color tc = SC_TEXT;
+        SDL_Color tc = sel ? SC_WHITE : SC_TEXT;
 
         // Truncate full system name to fit left panel (no icon)
         const char *full_name = system_full_name(systems[si].label);
         char label[48];
         truncate_to_fit(font_body, full_name, label, sizeof(label), LEFT_W - 50);
         draw_text(font_body, label, 18, iy + (ITEM_H - 22) / 2, tc);
-        Uint32 chev_sys = sel ? RGBA(0x3D, 0x2C, 0x88) : RGBA(0x5F, 0x66, 0x80);
+        Uint32 chev_sys = sel ? RGBA(SC_WHITE.r, SC_WHITE.g, SC_WHITE.b) : C_SEP;
         draw_chevron(LEFT_W - 22, iy + ITEM_H / 2, 7, 2, chev_sys);
     }
     draw_scrollbar(LEFT_W - 12, sy0, PANEL_ROWS * ITEM_H, sys_count, PANEL_ROWS, sys_offset);
@@ -2809,7 +2965,7 @@ static void draw_panel(void) {
     fill_rect(rx + 8, CONTENT_Y + 10 + PANEL_HDR_H - 1, rw - 16, 1, C_DIVIDER);
     char hdr[80];
     if (sys_count > 0)
-        snprintf(hdr, sizeof(hdr), "GAMES — %s  (%d)", systems[sys_sel].label, game_count);
+        snprintf(hdr, sizeof(hdr), "GAMES — %s (%d)", system_full_name(systems[sys_sel].label), game_count);
     else
         snprintf(hdr, sizeof(hdr), "GAMES");
     draw_text(font_small, hdr, rx + 16, CONTENT_Y + 12, SC_HDR);
@@ -2845,9 +3001,10 @@ static void draw_panel(void) {
                                         : (SDL_Color){0xC4, 0x9E, 0x1B, 0xFF};
                 draw_text(font_game, "\xe2\x98\x85", rx + 14, ty, star_col);
             }
-            draw_text(font_game, line1, rx + 14 + star_w, ty, SC_TEXT);
+            SDL_Color gtc = sel ? SC_WHITE : SC_TEXT;
+            draw_text(font_game, line1, rx + 14 + star_w, ty, gtc);
             if (line2[0])
-                draw_text(font_game, line2, rx + 14 + star_w, ty + GAME_LINE_GAP, SC_TEXT);
+                draw_text(font_game, line2, rx + 14 + star_w, ty + GAME_LINE_GAP, gtc);
         }
         draw_scrollbar(SCREEN_W - 14, gy0, GAME_ROWS * GAME_ITEM_H, game_count, GAME_ROWS, game_offset);
     }
@@ -2858,12 +3015,14 @@ static void draw_entry_list(const char *title, PlayEntry *entries, int count,
     fill_rect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
     draw_status();
     draw_hint_base();
-    draw_hints_row("Select", "Back", "L", "R", "Tabs", NULL,
+    draw_hints_row("Select", "Back", "L", "R", "Page", NULL,
                    count > 0 ? "Options" : NULL);
 
     draw_panel_asset(6, CONTENT_Y + 6, SCREEN_W - 12, CONTENT_H - 12);
-    fill_rect(10, CONTENT_Y + 10, SCREEN_W - 20, PANEL_HDR_H, C_PANEL_HDR);
-    draw_text(font_small, title, 22, CONTENT_Y + 15, SC_HDR);
+    fill_rect(10, CONTENT_Y + 10, SCREEN_W - 20, PANEL_HDR_H / 2, C_PANEL_HI);
+    fill_rect(10, CONTENT_Y + 10 + PANEL_HDR_H / 2, SCREEN_W - 20, PANEL_HDR_H - PANEL_HDR_H / 2, C_PANEL_HDR);
+    fill_rect(10, CONTENT_Y + 10 + PANEL_HDR_H - 1, SCREEN_W - 20, 1, C_DIVIDER);
+    draw_text(font_small, title, 22, CONTENT_Y + 12, SC_HDR);
 
     int rows = GAME_ROWS;
     if (*sel < *offset) *offset = *sel;
@@ -2897,31 +3056,88 @@ static void draw_entry_list(const char *title, PlayEntry *entries, int count,
         else fill_rect(10, iy + GAME_ITEM_H - 1, SCREEN_W - 20, 1, C_SEP);
 
         // System tag on right, 2-line title on left
-        draw_text(font_small, entries[idx].system, SCREEN_W - 54, iy + (GAME_ITEM_H - 14) / 2, SC_DIM);
-        Uint32 chev_ent = is_sel ? RGBA(0x3D, 0x2C, 0x88) : RGBA(0x5F, 0x66, 0x80);
-        draw_chevron(SCREEN_W - 22, iy + GAME_ITEM_H / 2, 7, 2, chev_ent);
-
         char line1[240], line2[240];
         int star_w = show_star ? text_w(font_game, "\xe2\x98\x85 ") : 0;  // UTF-8 ★
         int avail_w = SCREEN_W - 70 - star_w;
         wrap_text(font_game, entries[idx].label,
                   line1, sizeof(line1), line2, sizeof(line2), avail_w);
-        int ty = line2[0] ? iy + (GAME_ITEM_H - GAME_LINE_GAP - 28) / 2
-                          : iy + (GAME_ITEM_H - 28) / 2;
+        int ty = line2[0] ? iy + (GAME_ITEM_H - GAME_LINE_GAP - 22) / 2
+                          : iy + (GAME_ITEM_H - 22) / 2;
+        draw_text(font_small, entries[idx].system, SCREEN_W - 54, ty + 4, SC_DIM);
+        if (entries[idx].play_secs > 0) {
+            char pt[24];
+            format_playtime(entries[idx].play_secs, pt, sizeof(pt));
+            int pt_w = text_w(font_small, pt);
+            SDL_Color pt_col = is_sel ? SC_SUB_SEL : SC_DIM;
+            draw_text(font_small, pt, SCREEN_W - 46 - pt_w, ty + 24, pt_col);
+        }
+        Uint32 chev_ent = is_sel ? RGBA(SC_WHITE.r, SC_WHITE.g, SC_WHITE.b) : C_SEP;
+        draw_chevron(SCREEN_W - 22, iy + GAME_ITEM_H / 2, 7, 2, chev_ent);
         int tx = 14;
         if (show_star) {
-            SDL_Color star_col; SDL_GetRGB(C_SEL_BORDER, screen->format, &star_col.r, &star_col.g, &star_col.b); star_col.unused = 255;
+            SDL_Color star_col = {0xC4, 0x9E, 0x1B, 0xFF};
             draw_text(font_game, "\xe2\x98\x85", tx, ty, star_col);
             tx += star_w;
         }
-        draw_text(font_game, line1, tx, ty, SC_TEXT);
+        SDL_Color etc = is_sel ? SC_WHITE : SC_TEXT;
+        draw_text(font_game, line1, tx, ty, etc);
         if (line2[0])
-            draw_text(font_game, line2, tx, ty + GAME_LINE_GAP, SC_TEXT);
+            draw_text(font_game, line2, tx, ty + GAME_LINE_GAP, etc);
     }
     draw_scrollbar(SCREEN_W - 14, y0, rows * GAME_ITEM_H, count, rows, *offset);
 }
 
 // ── Browse by genre ───────────────────────────────────────────────────────────
+
+/* Returns 1 if needle appears as a whole word in hay (not inside a longer word). */
+static int word_match(const char *hay, const char *needle) {
+    const char *p = hay;
+    size_t nlen = strlen(needle);
+    while ((p = strstr(p, needle))) {
+        int pre_ok  = (p == hay) || !isalpha((unsigned char)p[-1]);
+        int post_ok = !isalpha((unsigned char)p[nlen]);
+        if (pre_ok && post_ok) return 1;
+        p++;
+    }
+    return 0;
+}
+
+/* Title-based franchise detection — runs after normalize_genre() and overrides
+   the genre bucket so games with many entries get their own browseable section
+   instead of being diluted across RPG / Platformer / etc. */
+static void franchise_override(const char *title, char *genre, int genrelen) {
+    static const struct { const char *kw; const char *cat; } FT[] = {
+        { "pokemon",       "Pokemon"       },
+        { "pok\xc3\xa9mon","Pokemon"       },  /* UTF-8 é */
+        { "zelda",         "Zelda"         },
+        { "mario",         "Mario"         },
+        { "wario",         "Mario"         },
+        { "sonic",         "Sonic"         },
+        { "mega man",      "Mega Man"      },
+        { "megaman",       "Mega Man"      },
+        { "rockman",       "Mega Man"      },
+        { "metroid",       "Metroid"       },
+        { "castlevania",   "Castlevania"   },
+        { "final fantasy", "Final Fantasy" },
+        { "dragon quest",  "Dragon Quest"  },
+        { "dragon ball",   "Dragon Ball"   },
+        { "fire emblem",   "Fire Emblem"   },
+        { "kirby",         "Kirby"         },
+        { "donkey kong",   "Donkey Kong"   },
+        { NULL, NULL }
+    };
+    char lower[256];
+    int i = 0;
+    for (; title[i] && i < 255; i++) lower[i] = (char)tolower((unsigned char)title[i]);
+    lower[i] = '\0';
+    for (int j = 0; FT[j].kw; j++) {
+        if (word_match(lower, FT[j].kw)) {
+            strncpy(genre, FT[j].cat, genrelen - 1);
+            genre[genrelen - 1] = '\0';
+            return;
+        }
+    }
+}
 
 static void normalize_genre(const char *raw, char *out, int outlen) {
     if (!raw || !raw[0] || strcmp(raw, "Unsorted") == 0) {
@@ -2970,6 +3186,32 @@ static int browse_game_cmp(const void *a, const void *b) {
     return strcasecmp(ga->title, gb->title);
 }
 
+static void xml_unescape(char *s) {
+    static const struct { const char *ent; char ch; } map[] = {
+        {"&amp;",  '&'}, {"&apos;", '\''}, {"&quot;", '"'},
+        {"&lt;",   '<'}, {"&gt;",   '>'},  {NULL, 0}
+    };
+    char *w = s;
+    while (*s) {
+        if (*s == '&') {
+            int replaced = 0;
+            for (int i = 0; map[i].ent; i++) {
+                size_t l = strlen(map[i].ent);
+                if (strncmp(s, map[i].ent, l) == 0) {
+                    *w++ = map[i].ch;
+                    s += l;
+                    replaced = 1;
+                    break;
+                }
+            }
+            if (!replaced) *w++ = *s++;
+        } else {
+            *w++ = *s++;
+        }
+    }
+    *w = '\0';
+}
+
 static void parse_miyoogamelist(const char *xml_path, const char *sys_folder) {
     FILE *f = fopen(xml_path, "r");
     if (!f) return;
@@ -2984,7 +3226,7 @@ static void parse_miyoogamelist(const char *xml_path, const char *sys_folder) {
         }
         if ((p = strstr(line, "<name>"))) {
             p += 6; end = strstr(p, "</name>");
-            if (end) { int n = (int)(end-p); if (n > 239) n = 239; strncpy(cur_name, p, n); cur_name[n] = 0; }
+            if (end) { int n = (int)(end-p); if (n > 239) n = 239; strncpy(cur_name, p, n); cur_name[n] = 0; xml_unescape(cur_name); }
         }
         if ((p = strstr(line, "<genre>"))) {
             p += 7; end = strstr(p, "</genre>");
@@ -2993,21 +3235,13 @@ static void parse_miyoogamelist(const char *xml_path, const char *sys_folder) {
             int n = (int)(end-p); if (n > 127) n = 127;
             strncpy(raw, p, n);
             BrowseGame *g = &browse_game_pool[browse_game_count++];
-            char title[240];
-            if (cur_name[0]) {
-                strncpy(title, cur_name, sizeof(title) - 1);
-                title[sizeof(title) - 1] = '\0';
-            } else {
-                const char *fname_for_title = cur_path;
-                if (fname_for_title[0] == '.' && fname_for_title[1] == '/') fname_for_title += 2;
-                strip_ext(fname_for_title, title, sizeof(title));
-            }
-            clean_display_name(title, g->title, sizeof(g->title));
+            strncpy(g->title,  cur_name[0] ? cur_name : cur_path, 239);
             strncpy(g->system, sys_folder, 23);
             const char *fname = cur_path;
             if (fname[0] == '.' && fname[1] == '/') fname += 2;
             snprintf(g->path, sizeof(g->path), ROMS_ROOT "/%s/%s", sys_folder, fname);
             normalize_genre(raw, g->genre, BROWSE_GENRE_LEN);
+            franchise_override(g->title, g->genre, BROWSE_GENRE_LEN);
             cur_path[0] = cur_name[0] = 0;
         }
     }
@@ -3083,20 +3317,19 @@ static void draw_browse(void) {
         int gi  = browse_genre_off + i;
         int iy  = sy0 + i * ITEM_H;
         int sel = (gi == browse_genre_sel);
-        if (sel && state == STATE_BROWSE_CATS)
+        if (sel)
             draw_select_asset(10, iy + 4, LEFT_W - 18, ITEM_H - 8);
-        else if (sel)
-            fill_rect(10, iy + 4, LEFT_W - 18, ITEM_H - 8, C_SEL);
         else
             fill_rect(10, iy + ITEM_H - 1, LEFT_W - 18, 1, C_SEP);
+        int lsel = sel;
         char label[48];
         truncate_to_fit(font_body, browse_genres[gi].label, label, sizeof(label), LEFT_W - 50);
-        draw_text(font_body, label, 18, iy + (ITEM_H - 22) / 2, SC_TEXT);
+        draw_text(font_body, label, 18, iy + (ITEM_H - 22) / 2, lsel ? SC_WHITE : SC_TEXT);
         char cnt[10];
         snprintf(cnt, sizeof(cnt), "%d", browse_genres[gi].count);
         draw_text(font_small, cnt, LEFT_W - 28 - text_w(font_small, cnt),
-                  iy + (ITEM_H - 14) / 2, SC_DIM);
-        Uint32 chev = (sel && state == STATE_BROWSE_CATS) ? C_SEL_BORDER : C_SEP;
+                  iy + (ITEM_H - 14) / 2, lsel ? SC_WHITE : SC_DIM);
+        Uint32 chev = lsel ? RGBA(SC_WHITE.r, SC_WHITE.g, SC_WHITE.b) : C_SEP;
         draw_chevron(LEFT_W - 22, iy + ITEM_H / 2, 7, 2, chev);
     }
     draw_scrollbar(LEFT_W - 12, sy0, PANEL_ROWS * ITEM_H,
@@ -3112,7 +3345,7 @@ static void draw_browse(void) {
     fill_rect(rx + 8, CONTENT_Y + 10 + PANEL_HDR_H/2, rw - 16, PANEL_HDR_H - PANEL_HDR_H/2, C_PANEL_HDR);
     fill_rect(rx + 8, CONTENT_Y + 10 + PANEL_HDR_H - 1, rw - 16, 1, C_DIVIDER);
     char hdr[80];
-    snprintf(hdr, sizeof(hdr), "%s  (%d)",
+    snprintf(hdr, sizeof(hdr), "%s (%d)",
              browse_genres[browse_genre_sel].label,
              browse_genres[browse_genre_sel].count);
     draw_text(font_small, hdr, rx + 16, CONTENT_Y + 12, SC_HDR);
@@ -3133,9 +3366,10 @@ static void draw_browse(void) {
                   line1, sizeof(line1), line2, sizeof(line2), rw - 32);
         int title_block = line2[0] ? GAME_LINE_GAP + 28 + 4 + 14 : 28 + 4 + 14;
         int ty = iy + (GAME_ITEM_H - title_block) / 2;
-        draw_text(font_game, line1, rx + 14, ty, SC_TEXT);
+        SDL_Color btc = sel ? SC_WHITE : SC_TEXT;
+        draw_text(font_game, line1, rx + 14, ty, btc);
         if (line2[0])
-            draw_text(font_game, line2, rx + 14, ty + GAME_LINE_GAP, SC_TEXT);
+            draw_text(font_game, line2, rx + 14, ty + GAME_LINE_GAP, btc);
         int sys_y = ty + (line2[0] ? GAME_LINE_GAP + 28 + 4 : 28 + 4);
         draw_text(font_small, browse_game_pool[gi].system, rx + 14, sys_y, SC_DIM);
     }
@@ -3224,9 +3458,10 @@ static void draw_apps(void) {
         if (!draw_asset(APP_ENTRIES[i].icon, 14, iy + (HOME_ITEM_H - 82) / 2, 82, 82))
             draw_builtin_icon(APP_ENTRIES[i].icon, 14, iy + (HOME_ITEM_H - 82) / 2, 82, 82, sel);
 
-        draw_text(font_large, APP_ENTRIES[i].label, 110, iy + (HOME_ITEM_H - 30) / 2, SC_TEXT);
+        draw_text(font_large, APP_ENTRIES[i].label, 110, iy + (HOME_ITEM_H - 30) / 2,
+                  sel ? SC_WHITE : SC_TEXT);
 
-        Uint32 chev_col = sel ? RGBA(0x3D, 0x2C, 0x88) : RGBA(0x5F, 0x66, 0x80);
+        Uint32 chev_col = sel ? RGBA(SC_WHITE.r, SC_WHITE.g, SC_WHITE.b) : C_SEP;
         draw_chevron(SCREEN_W - 32, iy + HOME_ITEM_H / 2, 8, 2, chev_col);
     }
 
@@ -3304,7 +3539,10 @@ static void draw_game_options(void) {
     }
 
     /* Dim content behind the card */
-    fill_rect_alpha(0, 0, SCREEN_W, SCREEN_H, 140);
+    if (g_dim_overlay)
+        SDL_BlitSurface(g_dim_overlay, NULL, screen, NULL);
+    else
+        fill_rect_alpha(0, 0, SCREEN_W, SCREEN_H, 140);
 
     int cw  = 520;
     int ch  = (game_opts_mode == 0) ? 300 : 340;
@@ -3325,8 +3563,9 @@ static void draw_game_options(void) {
         hdr[strlen(hdr)-1] = '\0';
     }
     if (strlen(hdr) < strlen(game_opts_name) && strlen(hdr) > 3) {
-        hdr[strlen(hdr)-3] = '\0';
-        strcat(hdr, "...");
+        size_t tl = strlen(hdr);
+        hdr[tl > 3 ? tl - 3 : 0] = '\0';
+        strncat(hdr, "...", sizeof(hdr) - strlen(hdr) - 1);
     }
     draw_text_center(font_body, hdr, cx, cw, cy + 16, SC_WHITE);
 
@@ -3505,7 +3744,10 @@ static void on_game_options_key(SDLKey k) {
 
 static void draw_info_panel(void) {
     /* Dim the settings list behind the panel */
-    fill_rect_alpha(0, 0, SCREEN_W, SCREEN_H, 140);
+    if (g_dim_overlay)
+        SDL_BlitSurface(g_dim_overlay, NULL, screen, NULL);
+    else
+        fill_rect_alpha(0, 0, SCREEN_W, SCREEN_H, 140);
     draw_status();
 
     /* Card geometry */
@@ -3602,7 +3844,8 @@ static void draw_info_panel(void) {
 
     /* Bottom separator + hint */
     fill_rect(cx + 12, cy + ch - 40, cw - 24, 1, C_SEP);
-    draw_text_center(font_small, "B  Back", cx, cw, cy + ch - 26, SC_DIM);
+    draw_hint_base();
+    draw_hints_row(NULL, "Back", NULL, NULL, NULL, NULL, NULL);
 }
 
 static void on_info_panel_key(SDLKey k) {
@@ -3613,6 +3856,18 @@ static void on_info_panel_key(SDLKey k) {
 }
 
 static void draw_settings(void) {
+    /* Rebuild cached value strings if stale (only on first draw after entry/change) */
+    if (!settings_val_valid) {
+        for (int i = 0; i < SETTINGS_COUNT; i++) {
+            if (!SETTINGS_ENTRIES[i].is_header) {
+                settings_value(&SETTINGS_ENTRIES[i],
+                               settings_val_cache[i], sizeof(settings_val_cache[i]));
+                settings_num_cache[i] = setting_cur_val(SETTINGS_ENTRIES[i].kind);
+            }
+        }
+        settings_val_valid = 1;
+    }
+
     draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
     draw_status();
     draw_hint_base();
@@ -3660,11 +3915,10 @@ static void draw_settings(void) {
             }
 
             draw_text(font_large, SETTINGS_ENTRIES[i].label,
-                      110, ry + (HOME_ITEM_H - 30) / 2, SC_TEXT);
+                      110, ry + (HOME_ITEM_H - 30) / 2, is_sel ? SC_WHITE : SC_TEXT);
 
-            char value[64];
-            settings_value(&SETTINGS_ENTRIES[i], value, sizeof(value));
-            SDL_Color value_col = is_sel ? SC_TEXT : SC_DIM;
+            const char *value = settings_val_cache[i];
+            SDL_Color value_col = is_sel ? SC_WHITE : SC_DIM;
 
             /* Right panel: x=450 to x=600 (150px), chevron at 608 */
             int rp_x = 450;
@@ -3674,7 +3928,7 @@ static void draw_settings(void) {
             int mv = setting_max_val(SETTINGS_ENTRIES[i].kind);
             if (mv > 0) {
                 /* Numeric: value text (font_body) above, wide progress bar below */
-                int cv  = setting_cur_val(SETTINGS_ENTRIES[i].kind);
+                int cv  = settings_num_cache[i];
                 int vw  = text_w(font_body, value);
                 int vy  = mid - 26;   /* upper half — text sits above center */
                 int by  = mid + 6;    /* lower half — bar sits below center */
@@ -3713,7 +3967,7 @@ static void draw_settings(void) {
                           mid - 11, value_col);
             }
 
-            Uint32 chev_col = is_sel ? RGBA(0x3D, 0x2C, 0x88) : RGBA(0x5F, 0x66, 0x80);
+            Uint32 chev_col = is_sel ? RGBA(SC_WHITE.r, SC_WHITE.g, SC_WHITE.b) : C_SEP;
             draw_chevron(SCREEN_W - 32, mid, 8, 2, chev_col);
         }
     }
@@ -3748,12 +4002,12 @@ static void render(void) {
     case STATE_RECENT:
         draw_entry_list("Recent", recent_entries, recent_count, &recent_sel, &recent_offset, 0);
         break;
+    case STATE_FAVORITES:
+        draw_entry_list("Favorites", favorite_entries, favorite_count, &favorite_sel, &favorite_offset, 1);
+        break;
     case STATE_MOST_PLAYED:
         draw_entry_list("Most Played", most_played_entries, most_played_count,
                         &most_played_sel, &most_played_offset, 0);
-        break;
-    case STATE_FAVORITES:
-        draw_entry_list("Favorites", favorite_entries, favorite_count, &favorite_sel, &favorite_offset, 1);
         break;
     case STATE_APPS:
         draw_apps();
@@ -3792,49 +4046,58 @@ static void render(void) {
 // ── Input ─────────────────────────────────────────────────────────────────────
 
 static void on_home_key(SDLKey k) {
-    int before = home_sel;
-    if ((k == BTN_UP   || k == BTN_L1) && home_sel > 0)              home_sel--;
-    if ((k == BTN_DOWN || k == BTN_R1) && home_sel < HOME_COUNT - 1) home_sel++;
-    // keep selection visible
-    if (home_sel < home_offset) home_offset = home_sel;
-    if (home_sel >= home_offset + HOME_VISIBLE) home_offset = home_sel - HOME_VISIBLE + 1;
-    if (home_sel != before) play_move();
+    /* L1/R1 always cycle sections */
+    if (k == BTN_L1) {
+        home_section = (home_section + 2) % 3;
+        play_move();
+        return;
+    }
+    if (k == BTN_R1) {
+        home_section = (home_section + 1) % 3;
+        play_move();
+        return;
+    }
+
+    /* Section 0 = BROWSE: navigate genres directly */
+    if (home_section == 0) {
+        if (browse_genre_count == 0) {
+            LogTimer _t = log_timer_begin("load_browse_data");
+            load_browse_data();
+            log_timer_end(_t);
+        }
+        if (!browse_genre_count) return;
+        int before = browse_genre_sel;
+        if (k == BTN_UP)   browse_genre_sel = (browse_genre_sel - 1 + browse_genre_count) % browse_genre_count;
+        if (k == BTN_DOWN) browse_genre_sel = (browse_genre_sel + 1) % browse_genre_count;
+        if (browse_genre_sel != before) { play_move(); browse_game_sel = 0; browse_game_off = 0; }
+        if (k == BTN_A || k == BTN_RIGHT) {
+            play_select();
+            browse_game_sel = 0; browse_game_off = 0;
+            state = STATE_BROWSE_GAMES;
+        }
+        return;
+    }
+
+    int count  = HOME_SEC_COUNT[home_section];
+    int *sel   = &home_sel_sec[home_section];
+    int  before = *sel;
+
+    if (k == BTN_UP   && *sel > 0)         (*sel)--;
+    if (k == BTN_DOWN && *sel < count - 1) (*sel)++;
+    if (*sel != before) play_move();
+
     if (k == BTN_A || k == BTN_RIGHT) {
         play_select();
-        switch (home_sel) {
-        case 0: // Favorites
-            load_favorites();
-            state = STATE_FAVORITES;
+        switch (HOME_SECTIONS[home_section][*sel].action) {
+        case 1: load_recent();    state = STATE_RECENT;    break;
+        case 2:
+            load_games(sys_sel);
+            if (game_count > 0) state = STATE_GAMES;
             break;
-        case 1: // Recent
-            load_recent();
-            state = STATE_RECENT;
-            break;
-        case 2: // Most Played
-            load_most_played();
-            state = STATE_MOST_PLAYED;
-            break;
-        case 3: // Library
-            state = STATE_SYSTEMS;
-            break;
-        case 4: // Sleep
-            exec_power_cmd("echo mem > /sys/power/state");
-            break;
-        case 5: // Browse
-            if (browse_genre_count == 0) {
-                LogTimer _t = log_timer_begin("load_browse_data");
-                load_browse_data();
-                log_timer_end(_t);
-            }
-            browse_genre_sel = 0; browse_genre_off = 0;
-            state = STATE_BROWSE_CATS;
-            break;
-        case 6: // Apps
-            state = STATE_APPS;
-            break;
-        case 7: // Settings
-            open_settings_kind("display");
-            break;
+        case 4: state = STATE_APPS; break;
+        case 5: open_settings_kind("display"); break;
+        case 6: exec_power_cmd("echo mem > /sys/power/state"); break;
+        case 7: load_most_played(); state = STATE_MOST_PLAYED; break;
         }
     }
 }
@@ -3916,7 +4179,7 @@ static void draw_font_picker(void) {
 
         draw_text(font_large, label, 20, iy + (HOME_ITEM_H - 30) / 2, SC_TEXT);
 
-        Uint32 chev_col = sel ? RGBA(0x3D, 0x2C, 0x88) : RGBA(0x5F, 0x66, 0x80);
+        Uint32 chev_col = sel ? C_SEL_BORDER : C_SEP;
         draw_chevron(SCREEN_W - 32, iy + HOME_ITEM_H / 2, 8, 2, chev_col);
     }
 
@@ -4011,7 +4274,7 @@ static void draw_theme_picker(void) {
 
         draw_text(font_large, p, 20, iy + (HOME_ITEM_H - 30) / 2, SC_TEXT);
 
-        Uint32 chev_col = sel ? RGBA(0x3D, 0x2C, 0x88) : RGBA(0x5F, 0x66, 0x80);
+        Uint32 chev_col = sel ? C_SEL_BORDER : C_SEP;
         draw_chevron(SCREEN_W - 32, iy + HOME_ITEM_H / 2, 8, 2, chev_col);
     }
 
@@ -4187,11 +4450,7 @@ static void on_games_key(SDLKey k) {
         sysbase = sysbase ? sysbase + 1 : sys->rom_dir;
         enter_game_options(g->name, g->path, launch, sysbase, STATE_GAMES);
     }
-    if (k == BTN_B || k == BTN_LEFT) {
-        play_back();
-        state = STATE_SYSTEMS;
-    }
-    if (k == BTN_MENU) {
+    if (k == BTN_B || k == BTN_LEFT || k == BTN_MENU) {
         play_back();
         state = STATE_HOME;
     }
@@ -4402,6 +4661,17 @@ int main(int argc, char *argv[]) {
     }
     log_msg("video surface OK");
 
+    /* Build a reusable semi-transparent black overlay for modal dimming.
+       SDL_SetAlpha on a plain black surface lets SDL composite it without
+       the per-pixel CPU loop that fill_rect_alpha uses. */
+    g_dim_overlay = SDL_CreateRGBSurface(SDL_SWSURFACE, SCREEN_W, SCREEN_H,
+                                          BPP, 0, 0, 0, 0);
+    if (g_dim_overlay) {
+        SDL_FillRect(g_dim_overlay, NULL,
+                     SDL_MapRGB(g_dim_overlay->format, 0, 0, 0));
+        SDL_SetAlpha(g_dim_overlay, SDL_SRCALPHA, 140);
+    }
+
     // Apply Onion's timezone so localtime() returns correct local time
     {
         FILE *tzf = fopen(SYSDIR "/config/.tz", "r");
@@ -4476,12 +4746,24 @@ int main(int argc, char *argv[]) {
         load_games(0);
         log_timer_end(_t);
     }
+    { LogTimer _t = log_timer_begin("load_browse_data");
+      load_browse_data();
+      log_timer_end(_t); }
     { LogTimer _t = log_timer_begin("scan_fonts");
       scan_fonts();
       log_timer_end(_t); }
 
     log_timer_end(_t_startup);
     log_msg("entering main loop");
+
+    /* Use minimum CPU frequency in the launcher — runtime.sh bumps to
+       performance before game launch and resets to ondemand after return. */
+    {
+        FILE *gov = fopen("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", "w");
+        if (gov) { fputs("powersave", gov); fclose(gov); }
+    }
+
+    g_last_input = time(NULL);  /* start idle timer from launch, not epoch */
 
     SDL_Event ev;
     while (running) {
@@ -4498,6 +4780,12 @@ int main(int argc, char *argv[]) {
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_QUIT) running = 0;
             if (ev.type == SDL_KEYDOWN) {
+                g_dirty = 1;
+                g_last_input = time(NULL);
+                if (g_idle_dimmed) {
+                    apply_brightness(g_pre_dim_brightness);
+                    g_idle_dimmed = 0;
+                }
                 SDLKey k = ev.key.keysym.sym;
                 switch (state) {
                 case STATE_HOME:    on_home_key(k);    break;
@@ -4506,12 +4794,11 @@ int main(int argc, char *argv[]) {
                 case STATE_RECENT:
                     on_entry_key(k, recent_entries, recent_count, &recent_sel, &recent_offset, STATE_RECENT);
                     break;
-                case STATE_MOST_PLAYED:
-                    on_entry_key(k, most_played_entries, most_played_count,
-                                 &most_played_sel, &most_played_offset, STATE_MOST_PLAYED);
-                    break;
                 case STATE_FAVORITES:
                     on_entry_key(k, favorite_entries, favorite_count, &favorite_sel, &favorite_offset, STATE_FAVORITES);
+                    break;
+                case STATE_MOST_PLAYED:
+                    on_entry_key(k, most_played_entries, most_played_count, &most_played_sel, &most_played_offset, STATE_MOST_PLAYED);
                     break;
                 case STATE_APPS:         on_apps_key(k);         break;
                 case STATE_SETTINGS:     on_settings_key(k);     break;
@@ -4524,7 +4811,44 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
-        render();
+
+        /* Idle backlight dim: after 30s no input, drop brightness 3 steps */
+        {
+            time_t now = time(NULL);
+            if (!g_idle_dimmed && g_last_input > 0 && (now - g_last_input) >= 30) {
+                g_pre_dim_brightness = json_int_file(POCKETOS_ROOT "/system.json", "brightness", 5);
+                apply_brightness(clampi(g_pre_dim_brightness - 3, 0, 10));
+                g_idle_dimmed = 1;
+            }
+        }
+
+        /* Per-minute tasks: clock tick + battery change + auto-sleep */
+        {
+            time_t now = time(NULL);
+            int _utc = json_int_file(POCKETOS_ROOT "/system.json", "utcoffset", 0);
+            time_t disp = now + _utc * 3600;
+            struct tm *tm = localtime(&disp);
+            if (tm->tm_min != g_last_clock_min) {
+                g_last_clock_min = tm->tm_min;
+                g_dirty = 1;
+
+                /* Battery change detection (cached, so cheap) */
+                int batt = read_battery();
+                if (batt != g_batt_last) { g_batt_last = batt; g_dirty = 1; }
+
+                /* Auto-sleep idle timer */
+                int hibernate_min = json_int_file(POCKETOS_ROOT "/system.json", "hibernate", 0);
+                if (hibernate_min > 0 && (now - g_last_input) >= hibernate_min * 60)
+                    exec_power_cmd("echo mem > /sys/power/state");
+            }
+        }
+
+        /* Screenshot toast counts down — keep rendering until it clears */
+        if (screenshot_toast_frames > 0) g_dirty = 1;
+        if (g_dirty) {
+            g_dirty = 0;
+            render();
+        }
         SDL_Delay(16);
 
 #ifdef POCKETOS_ENABLE_AUDIO
@@ -4547,6 +4871,10 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < asset_cache_count; i++) {
         SDL_FreeSurface(asset_cache[i].surface);
     }
+    for (int i = 0; i < text_cache_count; i++) {
+        SDL_FreeSurface(text_cache[i].surface);
+    }
+    if (g_dim_overlay) { SDL_FreeSurface(g_dim_overlay); g_dim_overlay = NULL; }
     // Persist settings so they survive reboot (mirrors runtime.sh save_settings)
     {
         char sn[64] = {0};
