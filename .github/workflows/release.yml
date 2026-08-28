@@ -14,12 +14,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check ARM build environment
+        run: python3 tools/check_environment.py --profile ci-arm --json
+
+      - name: Run integration tests
+        run: python3 -m unittest discover -v
+
       - name: Build pocketOS (ARM Cortex-A7)
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}/src/pocketOS:/work" \
-            aemiii91/miyoomini-toolchain:latest \
-            bash -l -c "cd /work && make clean && make"
+            -v "${{ github.workspace }}:/root/workspace" \
+            aemiii91/miyoomini-toolchain@sha256:e5123590ad75d27f0f4c91196e3119a255cad45f3ae15243e29a8e0a2ec50132 \
+            bash -l -c "source /root/.bashrc; make -C /root/workspace/src/pocketOS clean all"
 
       - name: Upload ARM binary
         uses: actions/upload-artifact@v4
@@ -27,13 +33,47 @@ jobs:
           name: pocketOS-arm
           path: src/pocketOS/pocketOS
 
+  # ── Render UI contract ─────────────────────────────────────────────────────
+  render-ui:
+    name: Render UI contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host render dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc \
+            imagemagick \
+            libsdl1.2-dev \
+            libsdl-image1.2-dev \
+            libsdl-ttf2.0-dev \
+            libsqlite3-dev \
+            zlib1g-dev
+
+      - name: Check host render environment
+        run: python3 tools/check_environment.py --profile host-render --json
+
+      - name: Render primary and secondary UI views
+        run: python3 tools/render_handheld_ui.py --output build/handheld-ui-ci
+
+      - name: Upload UI render evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketOS-ui-renders
+          path: build/handheld-ui-ci/*.png
+
   # ── Build SD card zip ───────────────────────────────────────────────────────
   build-zip:
     name: Build SD card zip
     runs-on: ubuntu-latest
-    needs: build-arm
+    needs: [build-arm, render-ui]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check ZIP assembly environment
+        run: python3 tools/check_environment.py --profile ci-zip --json
 
       - name: Download ARM binary
         uses: actions/download-artifact@v4
@@ -48,16 +88,27 @@ jobs:
           mkdir -p staging/.tmp_update/res
           cp dist/bin/pocketOS staging/.tmp_update/bin/pocketOS
           cp -r assets/res/pocketos staging/.tmp_update/res/pocketos
+          cp tools/install_runtime.py staging/install-pocketos.py
+          cp tools/onion_runtime.py staging/onion_runtime.py
           cp README.md staging/README.md
-          cd staging
-          zip -r "../pocketOS-${{ github.ref_name }}.zip" .
-          cd ..
+          (cd staging && find . -type f ! -name manifest.sha256 -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 sha256sum > manifest.sha256)
+          (cd staging && sha256sum -c manifest.sha256)
+          find staging -exec touch -h -d '1980-01-01 00:00:00 UTC' {} +
+          (cd staging && find . -type f -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 zip -X -q "../pocketOS-${{ github.ref_name }}.zip")
+          unzip -tq "pocketOS-${{ github.ref_name }}.zip"
+          sha256sum "pocketOS-${{ github.ref_name }}.zip" > "pocketOS-${{ github.ref_name }}.zip.sha256"
 
       - name: Upload SD card zip
         uses: actions/upload-artifact@v4
         with:
           name: pocketOS-sdcard-zip
-          path: pocketOS-${{ github.ref_name }}.zip
+          path: |
+            pocketOS-${{ github.ref_name }}.zip
+            pocketOS-${{ github.ref_name }}.zip.sha256
 
   # ── Build installers (matrix) ───────────────────────────────────────────────
   build-installers:
@@ -71,20 +122,29 @@ jobs:
             label: linux
             sep: ':'
             installer_out: PocketOS-Installer-linux
+            installer_asset: PocketOS-Installer-linux.tar.gz
             scanner_out:   PocketOS-GenreScanner-linux
-            archive_ext:   .tar.gz
+            scanner_asset: PocketOS-GenreScanner-linux.tar.gz
+            importer_out:  PocketOS-ROMImporter-linux
+            importer_asset: PocketOS-ROMImporter-linux.tar.gz
           - os: windows-latest
             label: windows
             sep: ';'
-            installer_out: PocketOS-Installer-windows.exe
-            scanner_out:   PocketOS-GenreScanner-windows.exe
-            archive_ext:   ''
+            installer_out: PocketOS-Installer-windows
+            installer_asset: PocketOS-Installer-windows.zip
+            scanner_out:   PocketOS-GenreScanner-windows
+            scanner_asset: PocketOS-GenreScanner-windows.exe
+            importer_out:  PocketOS-ROMImporter-windows
+            importer_asset: PocketOS-ROMImporter-windows.exe
           - os: macos-latest
             label: macos
             sep: ':'
             installer_out: PocketOS-Installer-macos
+            installer_asset: PocketOS-Installer-macos.tar.gz
             scanner_out:   PocketOS-GenreScanner-macos
-            archive_ext:   .tar.gz
+            scanner_asset: PocketOS-GenreScanner-macos.tar.gz
+            importer_out:  PocketOS-ROMImporter-macos
+            importer_asset: PocketOS-ROMImporter-macos.tar.gz
 
     steps:
       - uses: actions/checkout@v4
@@ -107,25 +167,25 @@ jobs:
         if: matrix.label != 'windows'
         run: |
           chmod +x dist/bin/pocketOS
-          mkdir -p release/pocketOS-${{ github.ref_name }}/.tmp_update/bin
-          mkdir -p release/pocketOS-${{ github.ref_name }}/.tmp_update/res
-          cp dist/bin/pocketOS release/pocketOS-${{ github.ref_name }}/.tmp_update/bin/pocketOS
-          cp -r assets/res/pocketos release/pocketOS-${{ github.ref_name }}/.tmp_update/res/pocketos
+          mkdir -p payload/.tmp_update/bin
+          mkdir -p payload/.tmp_update/res
+          cp dist/bin/pocketOS payload/.tmp_update/bin/pocketOS
+          cp -r assets/res/pocketos payload/.tmp_update/res/pocketos
 
       - name: Prepare payload (Windows)
         if: matrix.label == 'windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "release/pocketOS-${{ github.ref_name }}/.tmp_update/bin"
-          New-Item -ItemType Directory -Force -Path "release/pocketOS-${{ github.ref_name }}/.tmp_update/res"
-          Copy-Item "dist/bin/pocketOS" "release/pocketOS-${{ github.ref_name }}/.tmp_update/bin/pocketOS"
-          Copy-Item -Recurse "assets/res/pocketos" "release/pocketOS-${{ github.ref_name }}/.tmp_update/res/pocketos"
+          New-Item -ItemType Directory -Force -Path "payload/.tmp_update/bin"
+          New-Item -ItemType Directory -Force -Path "payload/.tmp_update/res"
+          Copy-Item "dist/bin/pocketOS" "payload/.tmp_update/bin/pocketOS"
+          Copy-Item -Recurse "assets/res/pocketos" "payload/.tmp_update/res/pocketos"
 
       - name: Build installer
         run: >
-          pyinstaller --onefile --windowed
+          pyinstaller --onedir --console
           --name ${{ matrix.installer_out }}
-          --add-data "release/pocketOS-${{ github.ref_name }}${{ matrix.sep }}release/pocketOS-${{ github.ref_name }}"
+          --add-data "payload${{ matrix.sep }}payload"
           tools/installer.py
 
       - name: Build genre scanner
@@ -134,23 +194,41 @@ jobs:
           --name ${{ matrix.scanner_out }}
           tools/genre_scanner.py
 
+      - name: Build ROM importer
+        run: >
+          pyinstaller --onefile --windowed
+          --name ${{ matrix.importer_out }}
+          tools/rom_importer.py
+
       - name: Package Unix executables (Linux / macOS)
         if: matrix.label != 'windows'
         run: |
           tar -czf dist/${{ matrix.installer_out }}.tar.gz -C dist ${{ matrix.installer_out }}
           tar -czf dist/${{ matrix.scanner_out }}.tar.gz  -C dist ${{ matrix.scanner_out }}
+          tar -czf dist/${{ matrix.importer_out }}.tar.gz -C dist ${{ matrix.importer_out }}
+
+      - name: Package Windows installer
+        if: matrix.label == 'windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/${{ matrix.installer_out }}" -DestinationPath "dist/${{ matrix.installer_out }}.zip"
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.installer_out }}
-          path: dist/${{ matrix.installer_out }}${{ matrix.archive_ext }}
+          path: dist/${{ matrix.installer_asset }}
 
       - name: Upload genre scanner
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.scanner_out }}
-          path: dist/${{ matrix.scanner_out }}${{ matrix.archive_ext }}
+          path: dist/${{ matrix.scanner_asset }}
+
+      - name: Upload ROM importer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.importer_out }}
+          path: dist/${{ matrix.importer_asset }}
 
   # ── Create GitHub Release ───────────────────────────────────────────────────
   release:
@@ -170,7 +248,13 @@ jobs:
       - name: Flatten artifacts
         run: |
           mkdir -p release-assets
-          find artifacts/ -type f | while read f; do
+          find artifacts/ -type f \( \
+            -name 'PocketOS-Installer-*' -o \
+            -name 'PocketOS-GenreScanner-*' -o \
+            -name 'PocketOS-ROMImporter-*' -o \
+            -name 'pocketOS-*.zip' -o \
+            -name 'pocketOS-*.zip.sha256' \
+          \) | while read f; do
             cp "$f" release-assets/
           done
           ls -lh release-assets/
@@ -189,15 +273,16 @@ jobs:
             ### Quick Install (SD card zip)
             1. Download `pocketOS-${{ github.ref_name }}.zip`
             2. Extract to the **root of your Miyoo SD card**
-            3. Eject and boot — PocketOS launches automatically
+            3. From a terminal, run `python3 install-pocketos.py` from the SD card root
+            4. Eject and boot
 
-            ### GUI Installer
-            Download the installer for your platform and point it at your SD card root.
+            ### Setup Suite
+            Download the installer for your platform and point it at your SD card root. It validates the Onion runtime before copying, installs a fail-open launcher hook, and makes the PocketOS binary executable.
 
             | Platform | Download |
             |----------|---------|
             | Linux    | `PocketOS-Installer-linux.tar.gz` — extract, then run `./PocketOS-Installer-linux` |
-            | Windows  | `PocketOS-Installer-windows.exe` — run directly |
+            | Windows  | `PocketOS-Installer-windows.zip` — extract, then run `PocketOS-Installer-windows.exe` |
             | macOS    | `PocketOS-Installer-macos.tar.gz` — extract, then run `./PocketOS-Installer-macos` |
 
             ### Genre Scanner
@@ -212,7 +297,7 @@ jobs:
             ---
 
             ### Uninstall
-            Delete `.tmp_update/bin/pocketOS` from your SD card and reboot.
+            Use the installer’s Uninstall option. Deleting `.tmp_update/bin/pocketOS` also returns to Onion's default menu because the launcher hook is fail-open.
           files: release-assets/*
           draft: false
           prerelease: false

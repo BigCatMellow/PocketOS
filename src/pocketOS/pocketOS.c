@@ -3,7 +3,7 @@
 // Replaces MainUI with a two-panel Pocket OS style interface.
 //
 // Screens:
-//   HOME    - vertical list: Games / Recents / Settings / Sleep
+//   HOME    - vertical list: Games / Favorites / Settings / Sleep
 //   SYSTEMS - two-panel: system list (left) | game list (right), navigate systems
 //   GAMES   - same two-panel, focus moves to game list
 //
@@ -14,6 +14,7 @@
 #include <SDL/SDL_image.h>
 #include <SDL/SDL_ttf.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <math.h>
 #include <signal.h>
 #include <stdio.h>
@@ -92,6 +93,15 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #define HEADER_H     36   /* settings section header row height */
 #define HOME_TAB_H   40   /* section tab strip height at top of home content */
 
+/* Primary game-browser shell from the handheld UI redesign. */
+#define BROWSER_HEADER_H 52
+#define BROWSER_FOOTER_H 40
+#define BROWSER_BODY_H   (SCREEN_H - BROWSER_HEADER_H - BROWSER_FOOTER_H)
+#define BROWSER_ROWS     5
+#define LIBRARY_SYS_ROWS 6
+#define SETTINGS_SECTION_H 24
+#define SETTINGS_ROW_H     56
+
 // ── Device paths ─────────────────────────────────────────────────────────────
 
 #ifndef POCKETOS_ROOT
@@ -116,6 +126,9 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #ifndef LOG_PATH
 #define LOG_PATH    SYSDIR "/logs/pocketos_debug.log"
 #endif
+#ifndef FIRMWARE_VERSION_PATH
+#define FIRMWARE_VERSION_PATH "/tmp/firmwareVersion"
+#endif
 #define MOST_PLAYED_DB \
     POCKETOS_ROOT "/Saves/CurrentProfile/play_activity/play_activity_db.sqlite"
 #ifndef FONT_PATH
@@ -127,6 +140,8 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #ifndef FONT_PRIMARY
 #define FONT_PRIMARY POCKETOS_ROOT "/miyoo/app/BPreplayBold.otf"
 #endif
+#define POCKETOS_VERSION "1.2.0"
+#define ONION_BASE_VERSION "v4.3.1-1"
 
 // ── Button mappings (from Onion keymap_sw.h) ─────────────────────────────────
 
@@ -159,23 +174,52 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 
 // Forward declarations for functions defined later in the file
 static void scan_fonts(void);
+static int current_font_index(void);
 static void apply_font_index(int idx);
 static void save_theme_font(int idx);
 static void draw_font_picker(void);
 static void on_font_picker_key(SDLKey k);
 static void scan_themes(void);
+static int current_theme_index(void);
 static void load_browse_data(void);
 static void draw_info_panel(void);
 static void on_info_panel_key(SDLKey k);
 static void apply_theme_index(int idx);
+static void preview_theme_index(int idx);
 static void draw_theme_picker(void);
 static void on_theme_picker_key(SDLKey k);
 static void load_theme(char *font_out, int font_outlen);
+static void load_theme_file(const char *path, char *font_out, int font_outlen);
+static void clear_text_cache(void);
+static SDL_Color browser_text(void);
+static SDL_Color browser_secondary(void);
+static SDL_Color browser_dim(void);
+static SDL_Color browser_dark_text(void);
+static Uint32 browser_rgb(Uint8 r, Uint8 g, Uint8 b);
+static Uint32 browser_accent(int category);
+static SDL_Color browser_accent_text(int category);
+static void draw_browser_badge(int x, int y, int w, const char *system, int selected);
+static void draw_browser_more(int x, int y, int w, int total, int offset,
+                              int visible, int category);
+static void format_playtime_compact(int secs, char *out, int outlen);
+static void draw_secondary_frame(const char *parent, const char *title,
+                                 const char *meta);
+static void draw_secondary_footer(int mode);
 
 // Named color constants (resolved at runtime)
 static Uint32 C_BG, C_BAR, C_SEP, C_SEL, C_PANEL_HDR;
 static Uint32 C_DIVIDER, C_CARD, C_CARD_BORDER;
 static Uint32 C_SEL_HI, C_SEL_BORDER, C_PANEL_HI;
+
+typedef struct {
+    Uint32 bg, bar, sep, sel, panel_hdr;
+    Uint32 divider, card, card_border;
+    Uint32 sel_hi, sel_border, panel_hi;
+    SDL_Color text, white, dim, sub_sel, hdr;
+} ThemePalette;
+
+static ThemePalette theme_preview_original;
+static int theme_preview_active = 0;
 
 // Retro cream/navy palette — see pocket_os_design_guide.md
 static SDL_Color SC_TEXT  = { 13,  28,  51, 255};  // dark navy #0D1C33
@@ -204,10 +248,16 @@ typedef enum {
     STATE_GAME_OPTIONS,
 } State;
 
-static State state = STATE_HOME;
+static void enter_game_options(const char *name, const char *path,
+                               const char *launch, const char *system,
+                               State back_state);
+
+static State state = STATE_MOST_PLAYED;
 static int   info_panel_about = 0;  /* 0 = device/miyoo info, 1 = pocket OS about */
+static State info_panel_back = STATE_SETTINGS;
 static int home_section    = 0;       /* 0=BROWSE(default)  1=PLAY(incl. Library)  2=SYSTEM */
 static int home_sel_sec[3] = {0,0,0}; /* per-section cursor */
+static int browser_category = 0;      /* Most Played, Browse, Library, Favorites, Settings */
 
 // ── Data structures ───────────────────────────────────────────────────────────
 
@@ -217,6 +267,7 @@ typedef struct {
     char    rom_dir[256];   // /mnt/SDCARD/Roms/GBA
     char    extlist[128];   // "gba|bin|zip|7z"
     time_t  rom_dir_mtime;  // mtime when game list was last loaded
+    int     rom_count;      // matching files in rom_dir, shown in Library
 } System;
 
 typedef struct {
@@ -378,6 +429,7 @@ static TTF_Font    *font_body  = NULL;   // 21pt — panels, bars
 static TTF_Font    *font_game  = NULL;   // 20pt — two-line game titles
 static TTF_Font    *font_large = NULL;   // 26pt — home rows, settings rows
 static TTF_Font    *font_small = NULL;   // 14pt — labels, hints, values
+static char         active_font_path[512] = "";
 static int          running = 1;
 
 #ifdef POCKETOS_ENABLE_AUDIO
@@ -438,7 +490,7 @@ static const HomeItem HOME_SEC0[] = {  /* BROWSE (special-cased, see draw_home_b
 static const HomeItem HOME_SEC1[] = {  /* PLAY */
     { "Most Played", "app_activity.png", 7 },
     { "Library",     "library.png",      2 },
-    { "Recent",      "recent.png",       1 },
+    { "Favorites",   "favorites.png",    1 },
 };
 static const HomeItem HOME_SEC2[] = {  /* SYSTEM */
     { "Apps",      "apps.png",     4 },
@@ -486,15 +538,36 @@ static AppEntry APP_ENTRIES[] = {
 // Handles the Emu config "../../Roms/GBA" pattern.
 // Strips leading "../" sequences and prepends POCKETOS_ROOT.
 
-static void resolve_sdcard_path(const char *rel, char *out, int outlen) {
+static void copy_truncated(char *dst, size_t dstlen, const char *src) {
+    if (dstlen == 0) return;
+    size_t len = strlen(src);
+    if (len >= dstlen) len = dstlen - 1;
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+}
+
+static int path_join(char *out, size_t outlen, const char *dir, const char *name) {
+    size_t dirlen = strlen(dir);
+    size_t namelen = strlen(name);
+    int needs_sep = dirlen > 0 && dir[dirlen - 1] != '/';
+    if (dirlen + (size_t)needs_sep + namelen + 1 > outlen) return 0;
+
+    memcpy(out, dir, dirlen);
+    if (needs_sep) out[dirlen++] = '/';
+    memcpy(out + dirlen, name, namelen);
+    out[dirlen + namelen] = '\0';
+    return 1;
+}
+
+static int resolve_sdcard_path(const char *rel, char *out, int outlen) {
     if (rel[0] == '/') {
-        strncpy(out, rel, outlen - 1);
-        out[outlen - 1] = '\0';
-        return;
+        if (strlen(rel) >= (size_t)outlen) return 0;
+        copy_truncated(out, (size_t)outlen, rel);
+        return 1;
     }
     const char *p = rel;
     while (strncmp(p, "../", 3) == 0) p += 3;
-    snprintf(out, outlen, "%s/%s", POCKETOS_ROOT, p);
+    return path_join(out, (size_t)outlen, POCKETOS_ROOT, p);
 }
 
 // ── Utility: check if file matches extlist ────────────────────────────────────
@@ -516,17 +589,53 @@ static int ext_match(const char *filename, const char *extlist) {
     return 0;
 }
 
+static int count_roms_in_dir(const char *rom_dir, const char *extlist) {
+    DIR *d = opendir(rom_dir);
+    if (!d) return 0;
+
+    int count = 0;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+        if (extlist[0] != '\0' && !ext_match(ent->d_name, extlist)) continue;
+
+        char fullpath[512];
+        struct stat st;
+        if (!path_join(fullpath, sizeof(fullpath), rom_dir, ent->d_name)) continue;
+        if (stat(fullpath, &st) == 0 && S_ISREG(st.st_mode)) count++;
+    }
+    closedir(d);
+    return count;
+}
+
 // ── Utility: strip file extension for display ─────────────────────────────────
 
 static void strip_ext(const char *filename, char *out, int outlen) {
-    strncpy(out, filename, outlen - 1);
-    out[outlen - 1] = '\0';
+    copy_truncated(out, (size_t)outlen, filename);
     char *dot = strrchr(out, '.');
     if (dot) *dot = '\0';
 }
 
 // ── Utility: tiny JSON string reader (no external dependency) ─────────────────
 // Reads the first value of "key" from a flat JSON file.
+
+static int json_copy_string(const char *p, char *out, int outlen) {
+    int i = 0;
+    while (*p && *p != '"' && i < outlen - 1) {
+        unsigned char ch = (unsigned char)*p++;
+        if (ch == '\\' && *p) {
+            ch = (unsigned char)*p++;
+            if (ch == 'n') ch = '\n';
+            else if (ch == 'r') ch = '\r';
+            else if (ch == 't') ch = '\t';
+            else if (ch == 'b') ch = '\b';
+            else if (ch == 'f') ch = '\f';
+        }
+        out[i++] = (char)ch;
+    }
+    out[i] = '\0';
+    return i > 0;
+}
 
 static int json_str(const char *filepath, const char *key, char *out, int outlen) {
     FILE *f = fopen(filepath, "r");
@@ -548,13 +657,7 @@ static int json_str(const char *filepath, const char *key, char *out, int outlen
     if (*p != '"') return 0;
     p++;
 
-    int i = 0;
-    while (*p && *p != '"' && i < outlen - 1) {
-        if (*p == '\\') { p++; }  // skip escape char, copy next char literally
-        out[i++] = *p++;
-    }
-    out[i] = '\0';
-    return i > 0;
+    return json_copy_string(p, out, outlen);
 }
 
 static int json_str_from_buf(const char *buf, const char *key, char *out, int outlen) {
@@ -568,18 +671,72 @@ static int json_str_from_buf(const char *buf, const char *key, char *out, int ou
     if (*p != '"') return 0;
     p++;
 
-    int i = 0;
-    while (*p && *p != '"' && i < outlen - 1) {
-        if (*p == '\\') p++;
-        out[i++] = *p++;
-    }
-    out[i] = '\0';
-    return i > 0;
+    return json_copy_string(p, out, outlen);
 }
 
 static void log_kv(const char *key, const char *value);
 static void log_int(const char *key, int value);
 static void log_errno_msg(const char *context, const char *path);
+
+static FILE *open_atomic_file(const char *path, char *tmp, size_t tmp_len) {
+    if (snprintf(tmp, tmp_len, "%s.tmp", path) >= (int)tmp_len) return NULL;
+    unlink(tmp);
+    return fopen(tmp, "w");
+}
+
+static int commit_atomic_file(FILE *f, const char *tmp, const char *path) {
+    int ok = 1;
+    if (fflush(f) != 0 || ferror(f)) ok = 0;
+    if (ok && fsync(fileno(f)) != 0) ok = 0;
+    if (fclose(f) != 0) ok = 0;
+    if (ok && rename(tmp, path) == 0) return 1;
+    log_errno_msg("atomic write failed", path);
+    unlink(tmp);
+    return 0;
+}
+
+static int json_write_string(FILE *f, const char *value) {
+    if (fputc('"', f) == EOF) return 0;
+    for (const unsigned char *p = (const unsigned char *)value; *p; p++) {
+        switch (*p) {
+        case '"': if (fputs("\\\"", f) == EOF) return 0; break;
+        case '\\': if (fputs("\\\\", f) == EOF) return 0; break;
+        case '\b': if (fputs("\\b", f) == EOF) return 0; break;
+        case '\f': if (fputs("\\f", f) == EOF) return 0; break;
+        case '\n': if (fputs("\\n", f) == EOF) return 0; break;
+        case '\r': if (fputs("\\r", f) == EOF) return 0; break;
+        case '\t': if (fputs("\\t", f) == EOF) return 0; break;
+        default:
+            if (*p < 0x20) {
+                if (fprintf(f, "\\u%04x", *p) < 0) return 0;
+            } else if (fputc(*p, f) == EOF) {
+                return 0;
+            }
+        }
+    }
+    return fputc('"', f) != EOF;
+}
+
+/* Onion's runtime parses the ROM from the separator between two double-quoted
+   arguments. Keep this format aligned with common/system/state.h. */
+static int onion_write_quoted_arg(FILE *f, const char *value) {
+    if (fputc('"', f) == EOF) return 0;
+    for (const char *p = value; *p; p++) {
+        if (*p == '"' || *p == '\n' || *p == '\r' || *p == '`') return 0;
+        if (fputc(*p, f) == EOF) return 0;
+    }
+    return fputc('"', f) != EOF;
+}
+
+static int write_onion_game_command(FILE *f, const char *launch, const char *rompath) {
+    if (fputs("LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ", f) == EOF)
+        return 0;
+    if (!onion_write_quoted_arg(f, launch) || fputc(' ', f) == EOF)
+        return 0;
+    if (!onion_write_quoted_arg(f, rompath) || fputc('\n', f) == EOF)
+        return 0;
+    return 1;
+}
 
 static int json_int_file(const char *filepath, const char *key, int fallback) {
     FILE *f = fopen(filepath, "r");
@@ -794,6 +951,19 @@ static void system_from_launch(const char *launch, char *out, int outlen) {
     int i = 0;
     while (*p && *p != '/' && i < outlen - 1) out[i++] = *p++;
     out[i] = '\0';
+}
+
+static System *find_system_for_rompath(const char *rompath) {
+    for (int i = 0; i < sys_count; i++) {
+        size_t root_len = strlen(systems[i].rom_dir);
+        if (strncmp(rompath, systems[i].rom_dir, root_len) == 0 &&
+            rompath[root_len] == '/') {
+            char launch[320];
+            snprintf(launch, sizeof(launch), "%s/launch.sh", systems[i].emu_dir);
+            if (access(launch, R_OK) == 0) return &systems[i];
+        }
+    }
+    return NULL;
 }
 
 // ── Battery level ─────────────────────────────────────────────────────────────
@@ -1046,27 +1216,25 @@ static void log_sdl_error(const char *context) {
     fflush(g_log_fp);  /* flush errors immediately so they survive a crash */
 }
 
-/* Signal handler — logs the signal then re-raises so the OS still gets it */
+/* Signal handler — logs a fixed message then re-raises the signal. */
 static const char *g_log_path_static = LOG_PATH;
 static void sig_handler(int sig) {
-    /* async-signal-safe: use write() not fprintf */
-    FILE *f = fopen(g_log_path_static, "a");
-    if (f) {
-        time_t now = time(NULL);
-        struct tm *tm = localtime(&now);
-        char ts[32];
-        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
-        const char *signame =
-            sig == SIGSEGV ? "SIGSEGV (segfault)" :
-            sig == SIGABRT ? "SIGABRT (abort)"    :
-            sig == SIGFPE  ? "SIGFPE (fpe)"       :
-            sig == SIGBUS  ? "SIGBUS (bus error)"  :
-            sig == SIGILL  ? "SIGILL (illegal op)" : "UNKNOWN";
-        fprintf(f, "[%s] *** CRASH signal=%d (%s) ***\n", ts, sig, signame);
-        fclose(f);
+    const char *msg = sig == SIGSEGV ? "*** POCKETOS CRASH: SIGSEGV ***\n" :
+                      sig == SIGABRT ? "*** POCKETOS CRASH: SIGABRT ***\n" :
+                      sig == SIGFPE  ? "*** POCKETOS CRASH: SIGFPE ***\n"  :
+                      sig == SIGBUS  ? "*** POCKETOS CRASH: SIGBUS ***\n"  :
+                      sig == SIGILL  ? "*** POCKETOS CRASH: SIGILL ***\n"  :
+                                       "*** POCKETOS CRASH: SIGNAL ***\n";
+    int fd = open(g_log_path_static, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (fd >= 0) {
+        size_t len = 0;
+        while (msg[len]) len++;
+        ssize_t written = write(fd, msg, len);
+        (void)written;
+        close(fd);
     }
     signal(sig, SIG_DFL);
-    raise(sig);
+    kill(getpid(), sig);
 }
 
 static void log_open(void) {
@@ -1090,7 +1258,7 @@ static void log_open(void) {
     fprintf(g_log_fp, "\n");
     fprintf(g_log_fp, "========================================\n");
     log_timestamp(g_log_fp);
-    fprintf(g_log_fp, "PocketOS v1.0  started\n");
+    fprintf(g_log_fp, "PocketOS v%s  started\n", POCKETOS_VERSION);
     fprintf(g_log_fp, "========================================\n");
     fflush(g_log_fp);
 
@@ -1447,7 +1615,7 @@ static const char *system_full_name(const char *label) {
     if (strcasecmp(label, "SNES")    == 0) return "Super Nintendo";
     if (strcasecmp(label, "N64")     == 0) return "Nintendo 64";
     if (strcasecmp(label, "VBOY")    == 0) return "Virtual Boy";
-    if (strcasecmp(label, "MD")      == 0) return "Mega Drive";
+    if (strcasecmp(label, "MD")      == 0) return "Genesis";
     if (strcasecmp(label, "GEN")     == 0 ||
         strcasecmp(label, "GENESIS") == 0) return "Genesis";
     if (strcasecmp(label, "SMS")     == 0) return "Master System";
@@ -1476,6 +1644,21 @@ static const char *system_full_name(const char *label) {
     if (strcasecmp(label, "VECTREX") == 0) return "Vectrex";
     if (strcasecmp(label, "ADVMAME") == 0) return "MAME";
     return label;  /* fall back to folder name if unknown */
+}
+
+static const char *library_system_name(const char *label) {
+    if (strcasecmp(label, "FC") == 0 || strcasecmp(label, "NES") == 0) return "NES";
+    if (strcasecmp(label, "SFC") == 0 || strcasecmp(label, "SNES") == 0) return "SNES";
+    if (strcasecmp(label, "GB") == 0) return "GB";
+    if (strcasecmp(label, "GBC") == 0) return "GBC";
+    if (strcasecmp(label, "GBA") == 0) return "GBA";
+    if (strcasecmp(label, "MD") == 0 || strcasecmp(label, "GEN") == 0 ||
+        strcasecmp(label, "GENESIS") == 0) return "Genesis";
+    if (strcasecmp(label, "PS") == 0 || strcasecmp(label, "PSX") == 0 ||
+        strcasecmp(label, "PS1") == 0) return "PS1";
+    if (strcasecmp(label, "ARCADE") == 0 || strcasecmp(label, "ADVMAME") == 0 ||
+        strcasecmp(label, "MAME") == 0) return "Arcade";
+    return system_full_name(label);
 }
 
 static const char *system_icon(const char *label) {
@@ -1518,7 +1701,10 @@ static void load_systems(void) {
         if (ent->d_name[0] == '.') continue;
 
         char emu_dir[256];
-        snprintf(emu_dir, sizeof(emu_dir), "%s/%s", EMU_ROOT, ent->d_name);
+        if (!path_join(emu_dir, sizeof(emu_dir), EMU_ROOT, ent->d_name)) {
+            log_kv("skip overlong emu path", ent->d_name);
+            continue;
+        }
 
         struct stat st;
         if (stat(emu_dir, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
@@ -1545,10 +1731,16 @@ static void load_systems(void) {
 
         char abs_rom[256];
         if (rompath[0] != '\0') {
-            resolve_sdcard_path(rompath, abs_rom, sizeof(abs_rom));
+            if (!resolve_sdcard_path(rompath, abs_rom, sizeof(abs_rom))) {
+                log_kv("skip overlong rom path", rompath);
+                continue;
+            }
         } else {
             // Guess: /mnt/SDCARD/Roms/<dirname>
-            snprintf(abs_rom, sizeof(abs_rom), "%s/%s", ROMS_ROOT, ent->d_name);
+            if (!path_join(abs_rom, sizeof(abs_rom), ROMS_ROOT, ent->d_name)) {
+                log_kv("skip overlong rom path", ent->d_name);
+                continue;
+            }
         }
 
         // Only include if roms directory exists
@@ -1558,10 +1750,11 @@ static void load_systems(void) {
         }
 
         System *sys = &systems[sys_count++];
-        strncpy(sys->label,   label,   sizeof(sys->label)   - 1);
-        strncpy(sys->emu_dir, emu_dir, sizeof(sys->emu_dir) - 1);
-        strncpy(sys->rom_dir, abs_rom, sizeof(sys->rom_dir) - 1);
-        strncpy(sys->extlist, extlist, sizeof(sys->extlist) - 1);
+        copy_truncated(sys->label,   sizeof(sys->label),   label);
+        copy_truncated(sys->emu_dir, sizeof(sys->emu_dir), emu_dir);
+        copy_truncated(sys->rom_dir, sizeof(sys->rom_dir), abs_rom);
+        copy_truncated(sys->extlist, sizeof(sys->extlist), extlist);
+        sys->rom_count = count_roms_in_dir(sys->rom_dir, sys->extlist);
     }
 
     closedir(d);
@@ -1613,7 +1806,10 @@ static void load_games(int idx) {
 
         // Skip directories
         char fullpath[512];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", sys->rom_dir, ent->d_name);
+        if (!path_join(fullpath, sizeof(fullpath), sys->rom_dir, ent->d_name)) {
+            log_kv("skip overlong game path", ent->d_name);
+            continue;
+        }
         struct stat st;
         if (stat(fullpath, &st) != 0 || S_ISDIR(st.st_mode)) continue;
 
@@ -1624,14 +1820,15 @@ static void load_games(int idx) {
         strip_ext(ent->d_name, display, sizeof(display));
 
         Game *g = &games[game_count++];
-        strncpy(g->name, display,  sizeof(g->name) - 1);
-        strncpy(g->path, fullpath, sizeof(g->path) - 1);
+        copy_truncated(g->name, sizeof(g->name), display);
+        copy_truncated(g->path, sizeof(g->path), fullpath);
     }
 
     closedir(d);
     qsort(games, game_count, sizeof(Game), cmp_game);
 
     sys->rom_dir_mtime = cur_mtime;
+    sys->rom_count = game_count;
     games_sys_idx = idx;
 
     char msg[64];
@@ -1667,7 +1864,7 @@ static void load_play_entries(const char *path, PlayEntry *entries, int *count, 
     log_int("load_play_entries count", *count);
 }
 
-static void load_recent(void) {
+__attribute__((unused)) static void load_recent(void) {
     LogTimer _t = log_timer_begin("load_recent");
     load_play_entries(POCKETOS_ROOT "/Roms/recentlist.json",
                       recent_entries, &recent_count, 0);
@@ -1707,7 +1904,7 @@ static void load_most_played(void) {
     }
 
     const char *sql =
-        "SELECT rom.name, rom.file_path, rom.type, "
+        "SELECT rom.name, rom.file_path, "
         "SUM(play_activity.play_time) AS total_secs "
         "FROM rom JOIN play_activity ON rom.id = play_activity.rom_id "
         "WHERE play_activity.play_time IS NOT NULL "
@@ -1724,8 +1921,7 @@ static void load_most_played(void) {
     while (sqlite3_step(stmt) == SQLITE_ROW && most_played_count < MAX_GAMES) {
         const char *name  = (const char *)sqlite3_column_text(stmt, 0);
         const char *fpath = (const char *)sqlite3_column_text(stmt, 1);
-        const char *sys   = (const char *)sqlite3_column_text(stmt, 2);
-        long long   secs  = sqlite3_column_int64(stmt, 3);
+        long long   secs  = sqlite3_column_int64(stmt, 2);
         if (!name || !fpath) continue;
 
         PlayEntry *e = &most_played_entries[most_played_count];
@@ -1734,32 +1930,18 @@ static void load_most_played(void) {
 
         strncpy(e->label, name, sizeof(e->label) - 1);
 
-        const char *rel_path = fpath;
-        if (strncmp(rel_path, ROMS_ROOT "/", strlen(ROMS_ROOT) + 1) == 0)
-            rel_path += strlen(ROMS_ROOT) + 1;
-
         if (fpath[0] == '/')
             snprintf(e->rompath, sizeof(e->rompath), "%s", fpath);
         else
             snprintf(e->rompath, sizeof(e->rompath), ROMS_ROOT "/%s", fpath);
 
-        const char *effective_sys = (sys && sys[0] && strcmp(sys, "ORPHAN") != 0)
-                                    ? sys : NULL;
-        char sys_buf[48] = {0};
-        if (!effective_sys && rel_path[0] != '/') {
-            snprintf(sys_buf, sizeof(sys_buf), "%s", rel_path);
-            char *slash = strchr(sys_buf, '/');
-            if (slash) {
-                *slash = '\0';
-                effective_sys = sys_buf;
-            }
-        }
-        if (!effective_sys) {
-            log_kv("most_played no system for", fpath);
+        System *entry_system = find_system_for_rompath(e->rompath);
+        if (!entry_system) {
+            log_kv("most_played no launcher for", e->rompath);
             continue;
         }
-        snprintf(e->launch, sizeof(e->launch), EMU_ROOT "/%s/launch.sh", effective_sys);
-        snprintf(e->system, sizeof(e->system), "%s", effective_sys);
+        snprintf(e->launch, sizeof(e->launch), "%s/launch.sh", entry_system->emu_dir);
+        system_from_launch(e->launch, e->system, sizeof(e->system));
 
         most_played_count++;
     }
@@ -1796,21 +1978,37 @@ static void toggle_favorite(const char *label, const char *rompath, const char *
             strncpy(e->label,   label,   sizeof(e->label)   - 1);
             strncpy(e->rompath, rompath, sizeof(e->rompath) - 1);
             strncpy(e->launch,  launch,  sizeof(e->launch)  - 1);
+            system_from_launch(e->launch, e->system, sizeof(e->system));
         }
     }
 
     /* Re-sort and write back */
     qsort(favorite_entries, favorite_count, sizeof(PlayEntry), cmp_play_entry);
-
-    FILE *f = fopen(FAV_PATH, "w");
-    if (!f) { log_errno_msg("toggle_favorite write failed", FAV_PATH); return; }
-    for (int i = 0; i < favorite_count; i++) {
-        fprintf(f, "{\"label\":\"%s\",\"rompath\":\"%s\",\"launch\":\"%s\"}\n",
-                favorite_entries[i].label,
-                favorite_entries[i].rompath,
-                favorite_entries[i].launch);
+    if (favorite_count == 0) {
+        favorite_sel = 0;
+        favorite_offset = 0;
+    } else {
+        if (favorite_sel >= favorite_count) favorite_sel = favorite_count - 1;
+        if (favorite_offset > favorite_sel) favorite_offset = favorite_sel;
     }
-    fclose(f);
+
+    char tmp[sizeof(FAV_PATH) + 8];
+    FILE *f = open_atomic_file(FAV_PATH, tmp, sizeof(tmp));
+    if (!f) {
+        log_errno_msg("toggle_favorite write failed", FAV_PATH);
+        load_favorites();
+        return;
+    }
+    for (int i = 0; i < favorite_count; i++) {
+        fputs("{\"label\":", f);
+        json_write_string(f, favorite_entries[i].label);
+        fputs(",\"rompath\":", f);
+        json_write_string(f, favorite_entries[i].rompath);
+        fputs(",\"launch\":", f);
+        json_write_string(f, favorite_entries[i].launch);
+        fputs("}\n", f);
+    }
+    if (!commit_atomic_file(f, tmp, FAV_PATH)) load_favorites();
 }
 
 // ── Launch a game ─────────────────────────────────────────────────────────────
@@ -1839,17 +2037,21 @@ static void launch_game(int sys_idx, int game_idx) {
     log_file_state("launch launch_sh", launch_sh);
     log_file_state("launch rom_state", game->path);
 
-    FILE *f = fopen(CMD_PATH, "w");
+    char tmp[sizeof(CMD_PATH) + 8];
+    FILE *f = open_atomic_file(CMD_PATH, tmp, sizeof(tmp));
     if (!f) {
         log_errno_msg("cmd open failed", CMD_PATH);
         return;
     }
-
-    fprintf(f,
-            "LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so "
-            "\"%s/launch.sh\" \"%s\"",
-            sys->emu_dir, game->path);
-    fclose(f);
+    char launch[sizeof(sys->emu_dir) + 16];
+    snprintf(launch, sizeof(launch), "%s/launch.sh", sys->emu_dir);
+    if (!write_onion_game_command(f, launch, game->path)) {
+        fclose(f);
+        unlink(tmp);
+        log_kv("unsupported launch path", game->path);
+        return;
+    }
+    if (!commit_atomic_file(f, tmp, CMD_PATH)) return;
 
     if (chmod(CMD_PATH, 0755) != 0) log_errno_msg("cmd chmod failed", CMD_PATH);
     log_kv("cmd written", CMD_PATH);
@@ -1866,16 +2068,19 @@ static void launch_entry(PlayEntry *entry) {
     log_file_state("launch entry rom_state", entry->rompath);
     log_file_state("launch entry launch_state", entry->launch);
 
-    FILE *f = fopen(CMD_PATH, "w");
+    char tmp[sizeof(CMD_PATH) + 8];
+    FILE *f = open_atomic_file(CMD_PATH, tmp, sizeof(tmp));
     if (!f) {
         log_errno_msg("cmd open failed", CMD_PATH);
         return;
     }
-    fprintf(f,
-            "LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so "
-            "\"%s\" \"%s\"",
-            entry->launch, entry->rompath);
-    fclose(f);
+    if (!write_onion_game_command(f, entry->launch, entry->rompath)) {
+        fclose(f);
+        unlink(tmp);
+        log_kv("unsupported launch path", entry->rompath);
+        return;
+    }
+    if (!commit_atomic_file(f, tmp, CMD_PATH)) return;
     if (chmod(CMD_PATH, 0755) != 0) log_errno_msg("cmd chmod failed", CMD_PATH);
     log_file_state("cmd file", CMD_PATH);
     play_launch();
@@ -1885,13 +2090,14 @@ static void launch_entry(PlayEntry *entry) {
 
 static void launch_app_cmd(const char *cmd) {
     log_kv("launch app cmd", cmd);
-    FILE *f = fopen(CMD_PATH, "w");
+    char tmp[sizeof(CMD_PATH) + 8];
+    FILE *f = open_atomic_file(CMD_PATH, tmp, sizeof(tmp));
     if (!f) {
         log_errno_msg("cmd open failed", CMD_PATH);
         return;
     }
     fprintf(f, "#!/bin/sh\n%s\n", cmd);
-    fclose(f);
+    if (!commit_atomic_file(f, tmp, CMD_PATH)) return;
     if (chmod(CMD_PATH, 0755) != 0) log_errno_msg("cmd chmod failed", CMD_PATH);
     log_file_state("cmd file", CMD_PATH);
     play_launch();
@@ -1904,7 +2110,8 @@ static void launch_app_cmd(const char *cmd) {
 static void exec_power_cmd(const char *cmd) {
     log_kv("exec power cmd", cmd);
     stop_audio();
-    system(cmd);
+    int rc = system(cmd);
+    if (rc != 0) log_int("exec power cmd rc", rc);
     running = 0;
 }
 
@@ -1921,7 +2128,7 @@ static void run_settings_action(const char *cmd) {
 
 /* Height of a single row by index. */
 static int settings_row_h(int i) {
-    return SETTINGS_ENTRIES[i].is_header ? HEADER_H : HOME_ITEM_H;
+    return SETTINGS_ENTRIES[i].is_header ? SETTINGS_SECTION_H : SETTINGS_ROW_H;
 }
 
 /* Pixel Y (relative to CONTENT_Y) of the top of row i. */
@@ -1950,7 +2157,7 @@ static void open_settings_kind(const char *kind) {
     int row_y = settings_row_top(settings_sel);
     settings_scroll_px = row_y;
     if (settings_scroll_px < 0) settings_scroll_px = 0;
-    int max_scroll = total_settings_height() - CONTENT_H;
+    int max_scroll = total_settings_height() - BROWSER_BODY_H;
     if (max_scroll < 0) max_scroll = 0;
     if (settings_scroll_px > max_scroll) settings_scroll_px = max_scroll;
     settings_val_valid = 0;
@@ -2171,6 +2378,15 @@ static int setting_cur_val(const char *k) {
     return 0;
 }
 
+static void clear_text_cache(void) {
+    for (int i = 0; i < text_cache_count; i++) {
+        SDL_FreeSurface(text_cache[i].surface);
+        text_cache[i].surface = NULL;
+    }
+    text_cache_count = 0;
+    text_cache_frame = 0;
+}
+
 static void draw_text(TTF_Font *font, const char *text, int x, int y, SDL_Color col) {
     if (!text || text[0] == '\0') return;
 
@@ -2229,7 +2445,7 @@ static int text_w(TTF_Font *font, const char *text) {
 }
 
 /* Formats seconds as "12h 34m" / "34m" / "<1m" into out. */
-static void format_playtime(int secs, char *out, int outlen) {
+__attribute__((unused)) static void format_playtime(int secs, char *out, int outlen) {
     if (secs < 60) { snprintf(out, outlen, "<1m"); return; }
     int mins = secs / 60;
     int hrs  = mins / 60;
@@ -2310,28 +2526,23 @@ static void take_screenshot(void) {
         snprintf(out, sizeof(out), "%s/Screenshot_%03d.png", dir, n);
         if (access(out, F_OK) != 0) break;
     }
-
-    FILE *f = fopen(out, "wb");
-    if (!f) { log_errno_msg("screenshot fopen failed", out); return; }
+    if (n == 1000) {
+        log_msg("screenshot limit reached");
+        return;
+    }
 
     int w = screen->w, h = screen->h;
-
-    /* PNG signature */
-    static const uint8_t sig[8] = {137,80,78,71,13,10,26,10};
-    fwrite(sig, 8, 1, f);
-
-    /* IHDR */
-    uint8_t ihdr[13] = {0};
-    png_put_u32be(ihdr,     (uint32_t)w);
-    png_put_u32be(ihdr + 4, (uint32_t)h);
-    ihdr[8] = 8;   /* bit depth */
-    ihdr[9] = 2;   /* colour type: RGB */
-    png_write_chunk(f, "IHDR", ihdr, 13);
-
-    /* Build filter-byte-prefixed raw rows */
     int rowbytes = 1 + w * 3;
     uint8_t *raw = malloc((size_t)h * rowbytes);
-    SDL_LockSurface(screen);
+    if (!raw) {
+        log_msg("screenshot raw allocation failed");
+        return;
+    }
+    if (SDL_LockSurface(screen) != 0) {
+        free(raw);
+        log_sdl_error("screenshot lock");
+        return;
+    }
     for (int y = 0; y < h; y++) {
         raw[y * rowbytes] = 0;  /* filter: None */
         for (int x = 0; x < w; x++) {
@@ -2348,8 +2559,35 @@ static void take_screenshot(void) {
     /* Compress and write IDAT */
     uLongf comp_len = compressBound((uLong)h * rowbytes);
     uint8_t *comp = malloc(comp_len);
-    compress2(comp, &comp_len, raw, (uLong)h * rowbytes, 6);
+    if (!comp) {
+        free(raw);
+        log_msg("screenshot compression allocation failed");
+        return;
+    }
+    int zresult = compress2(comp, &comp_len, raw, (uLong)h * rowbytes, 6);
     free(raw);
+    if (zresult != Z_OK) {
+        free(comp);
+        log_int("screenshot compression failed", zresult);
+        return;
+    }
+
+    FILE *f = fopen(out, "wb");
+    if (!f) {
+        free(comp);
+        log_errno_msg("screenshot fopen failed", out);
+        return;
+    }
+
+    /* PNG signature and header */
+    static const uint8_t sig[8] = {137,80,78,71,13,10,26,10};
+    fwrite(sig, 8, 1, f);
+    uint8_t ihdr[13] = {0};
+    png_put_u32be(ihdr,     (uint32_t)w);
+    png_put_u32be(ihdr + 4, (uint32_t)h);
+    ihdr[8] = 8;
+    ihdr[9] = 2;
+    png_write_chunk(f, "IHDR", ihdr, 13);
     png_write_chunk(f, "IDAT", comp, (uint32_t)comp_len);
     free(comp);
 
@@ -2518,8 +2756,8 @@ static void draw_button_hint(const char *asset, const char *label, const char *t
 
 // Truncate a string to fit inside max_px pixels using the given font
 static void truncate_to_fit(TTF_Font *font, const char *src, char *dst, int dstlen, int max_px) {
-    strncpy(dst, src, dstlen - 1);
-    dst[dstlen - 1] = '\0';
+    if (src != dst) copy_truncated(dst, (size_t)dstlen, src);
+    else if (dstlen > 0) dst[dstlen - 1] = '\0';
     while (strlen(dst) > 3 && text_w(font, dst) > max_px) {
         int l = strlen(dst);
         dst[l-1] = '\0';
@@ -2535,11 +2773,11 @@ static void truncate_to_fit(TTF_Font *font, const char *src, char *dst, int dstl
 static void wrap_text(TTF_Font *font, const char *src,
                       char *out1, int buf1, char *out2, int buf2, int max_px) {
     if (text_w(font, src) <= max_px) {
-        strncpy(out1, src, buf1 - 1); out1[buf1 - 1] = '\0';
+        copy_truncated(out1, (size_t)buf1, src);
         out2[0] = '\0';
         return;
     }
-    strncpy(out1, src, buf1 - 1); out1[buf1 - 1] = '\0';
+    copy_truncated(out1, (size_t)buf1, src);
     int split = -1;
     int len = (int)strlen(out1);
     for (int i = len - 1; i > 0; i--) {
@@ -2550,12 +2788,12 @@ static void wrap_text(TTF_Font *font, const char *src,
         }
     }
     if (split < 0) {
-        strncpy(out1, src, buf1 - 1); out1[buf1 - 1] = '\0';
+        copy_truncated(out1, (size_t)buf1, src);
         truncate_to_fit(font, out1, out1, buf1, max_px);
         out2[0] = '\0';
         return;
     }
-    strncpy(out2, src + split + 1, buf2 - 1); out2[buf2 - 1] = '\0';
+    copy_truncated(out2, (size_t)buf2, src + split + 1);
     if (text_w(font, out2) > max_px)
         truncate_to_fit(font, out2, out2, buf2, max_px);
 }
@@ -2806,8 +3044,8 @@ static const char *home_item_subtitle(int action) {
     static char buf[64];
     switch (action) {
     case 1:
-        if (recent_count == 0) return "nothing played yet";
-        snprintf(buf, sizeof(buf), "%d recently played", recent_count);
+        if (favorite_count == 0) return "no favorites yet";
+        snprintf(buf, sizeof(buf), "%d favorite%s", favorite_count, favorite_count == 1 ? "" : "s");
         return buf;
     case 2:
         snprintf(buf, sizeof(buf), "%d system%s", sys_count, sys_count == 1 ? "" : "s");
@@ -2823,7 +3061,7 @@ static const char *home_item_subtitle(int action) {
     }
 }
 
-static void draw_home(void) {
+__attribute__((unused)) static void draw_home(void) {
     draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
     draw_status();
     draw_home_hints();
@@ -2906,7 +3144,7 @@ static void draw_home(void) {
 
 // ── Two-panel (systems + games) ───────────────────────────────────────────────
 
-static void draw_panel(void) {
+__attribute__((unused)) static void draw_panel(void) {
     fill_rect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
     draw_status();
     draw_hint_base();
@@ -3012,23 +3250,16 @@ static void draw_panel(void) {
 
 static void draw_entry_list(const char *title, PlayEntry *entries, int count,
                             int *sel, int *offset, int show_star) {
-    fill_rect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
-    draw_status();
-    draw_hint_base();
-    draw_hints_row("Select", "Back", "L", "R", "Page", NULL,
-                   count > 0 ? "Options" : NULL);
+    char meta[24];
+    snprintf(meta, sizeof(meta), "%d GAMES", count);
+    draw_secondary_frame("LIBRARY", title, meta);
+    draw_secondary_footer(4);
 
-    draw_panel_asset(6, CONTENT_Y + 6, SCREEN_W - 12, CONTENT_H - 12);
-    fill_rect(10, CONTENT_Y + 10, SCREEN_W - 20, PANEL_HDR_H / 2, C_PANEL_HI);
-    fill_rect(10, CONTENT_Y + 10 + PANEL_HDR_H / 2, SCREEN_W - 20, PANEL_HDR_H - PANEL_HDR_H / 2, C_PANEL_HDR);
-    fill_rect(10, CONTENT_Y + 10 + PANEL_HDR_H - 1, SCREEN_W - 20, 1, C_DIVIDER);
-    draw_text(font_small, title, 22, CONTENT_Y + 12, SC_HDR);
-
-    int rows = GAME_ROWS;
+    int rows = BROWSER_ROWS;
     if (*sel < *offset) *offset = *sel;
     if (*sel >= *offset + rows) *offset = *sel - rows + 1;
 
-    int y0 = CONTENT_Y + PANEL_HDR_H + 12;
+    int y0 = 82;
     if (count == 0) {
         const char *hint1 = NULL, *hint2 = NULL;
         if (strcmp(title, "Favorites") == 0) {
@@ -3043,48 +3274,38 @@ static void draw_entry_list(const char *title, PlayEntry *entries, int count,
         } else {
             hint1 = "Nothing here yet.";
         }
-        draw_text(font_body, hint1, 24, y0 + 28, SC_DIM);
-        if (hint2) draw_text(font_body, hint2, 24, y0 + 58, SC_DIM);
+        draw_text_center(font_body, hint1, 0, SCREEN_W, 206, browser_secondary());
+        if (hint2) draw_text_center(font_small, hint2, 0, SCREEN_W, 240, browser_dim());
         return;
     }
 
     for (int i = 0; i < rows && *offset + i < count; i++) {
         int idx = *offset + i;
-        int iy = y0 + i * GAME_ITEM_H;
+        int iy = y0 + i * 64;
         int is_sel = idx == *sel;
-        if (is_sel) draw_select_asset(10, iy + 4, SCREEN_W - 20, GAME_ITEM_H - 8);
-        else fill_rect(10, iy + GAME_ITEM_H - 1, SCREEN_W - 20, 1, C_SEP);
+        if (is_sel)
+            fill_rect(10, iy + 3, SCREEN_W - 20, 58, browser_accent(4));
+        else
+            fill_rect(18, iy + 63, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
 
-        // System tag on right, 2-line title on left
-        char line1[240], line2[240];
-        int star_w = show_star ? text_w(font_game, "\xe2\x98\x85 ") : 0;  // UTF-8 ★
-        int avail_w = SCREEN_W - 70 - star_w;
-        wrap_text(font_game, entries[idx].label,
-                  line1, sizeof(line1), line2, sizeof(line2), avail_w);
-        int ty = line2[0] ? iy + (GAME_ITEM_H - GAME_LINE_GAP - 22) / 2
-                          : iy + (GAME_ITEM_H - 22) / 2;
-        draw_text(font_small, entries[idx].system, SCREEN_W - 54, ty + 4, SC_DIM);
+        char label[240];
+        truncate_to_fit(font_game, entries[idx].label, label, sizeof(label), 430);
+        int tx = show_star ? 46 : 20;
+        if (show_star)
+            draw_text(font_body, "*", 24, iy + 20,
+                      is_sel ? browser_dark_text() : browser_accent_text(0));
+        draw_text(font_game, label, tx, iy + 16,
+                  is_sel ? browser_dark_text() : browser_text());
+        draw_browser_badge(492, iy + 20, 54, entries[idx].system, is_sel);
         if (entries[idx].play_secs > 0) {
             char pt[24];
-            format_playtime(entries[idx].play_secs, pt, sizeof(pt));
+            format_playtime_compact(entries[idx].play_secs, pt, sizeof(pt));
             int pt_w = text_w(font_small, pt);
-            SDL_Color pt_col = is_sel ? SC_SUB_SEL : SC_DIM;
-            draw_text(font_small, pt, SCREEN_W - 46 - pt_w, ty + 24, pt_col);
+            draw_text(font_small, pt, 616 - pt_w, iy + 23,
+                      is_sel ? browser_dark_text() : browser_secondary());
         }
-        Uint32 chev_ent = is_sel ? RGBA(SC_WHITE.r, SC_WHITE.g, SC_WHITE.b) : C_SEP;
-        draw_chevron(SCREEN_W - 22, iy + GAME_ITEM_H / 2, 7, 2, chev_ent);
-        int tx = 14;
-        if (show_star) {
-            SDL_Color star_col = {0xC4, 0x9E, 0x1B, 0xFF};
-            draw_text(font_game, "\xe2\x98\x85", tx, ty, star_col);
-            tx += star_w;
-        }
-        SDL_Color etc = is_sel ? SC_WHITE : SC_TEXT;
-        draw_text(font_game, line1, tx, ty, etc);
-        if (line2[0])
-            draw_text(font_game, line2, tx, ty + GAME_LINE_GAP, etc);
     }
-    draw_scrollbar(SCREEN_W - 14, y0, rows * GAME_ITEM_H, count, rows, *offset);
+    draw_browser_more(0, 414, SCREEN_W, count, *offset, rows, 4);
 }
 
 // ── Browse by genre ───────────────────────────────────────────────────────────
@@ -3173,7 +3394,7 @@ static void normalize_genre(const char *raw, char *out, int outlen) {
         if (strstr(second, "Compil"))  { strncpy(out, "Compilation", outlen-1); goto done; }
         strncpy(out, "Misc", outlen-1); goto done;
     }
-    strncpy(out, first, outlen-1);
+    copy_truncated(out, (size_t)outlen, first);
 done:
     out[outlen-1] = '\0';
 }
@@ -3235,11 +3456,18 @@ static void parse_miyoogamelist(const char *xml_path, const char *sys_folder) {
             int n = (int)(end-p); if (n > 127) n = 127;
             strncpy(raw, p, n);
             BrowseGame *g = &browse_game_pool[browse_game_count++];
-            strncpy(g->title,  cur_name[0] ? cur_name : cur_path, 239);
-            strncpy(g->system, sys_folder, 23);
+            copy_truncated(g->title, sizeof(g->title),
+                           cur_name[0] ? cur_name : cur_path);
+            copy_truncated(g->system, sizeof(g->system), sys_folder);
             const char *fname = cur_path;
             if (fname[0] == '.' && fname[1] == '/') fname += 2;
-            snprintf(g->path, sizeof(g->path), ROMS_ROOT "/%s/%s", sys_folder, fname);
+            char system_rom_dir[256];
+            if (!path_join(system_rom_dir, sizeof(system_rom_dir), ROMS_ROOT, sys_folder) ||
+                !path_join(g->path, sizeof(g->path), system_rom_dir, fname)) {
+                browse_game_count--;
+                cur_path[0] = cur_name[0] = 0;
+                continue;
+            }
             normalize_genre(raw, g->genre, BROWSE_GENRE_LEN);
             franchise_override(g->title, g->genre, BROWSE_GENRE_LEN);
             cur_path[0] = cur_name[0] = 0;
@@ -3284,7 +3512,649 @@ static void load_browse_data(void) {
     }
 }
 
-static void draw_browse(void) {
+// ── Handheld redesign: primary game-browser shell ───────────────────────────
+
+typedef struct {
+    Uint32 bg, surface, line, raised, muted;
+    int is_light;
+    SDL_Color text, secondary, dim, dark_text;
+    Uint32 accent[5];
+    SDL_Color accent_text[5];
+} BrowserPalette;
+
+static BrowserPalette browser_palette;
+static int browser_palette_ready = 0;
+
+static int color_luma(SDL_Color color) {
+    return (299 * color.r + 587 * color.g + 114 * color.b) / 1000;
+}
+
+static SDL_Color mix_color(SDL_Color a, SDL_Color b, int b_weight) {
+    if (b_weight < 0) b_weight = 0;
+    if (b_weight > 255) b_weight = 255;
+    int a_weight = 255 - b_weight;
+    return (SDL_Color){
+        (Uint8)((a.r * a_weight + b.r * b_weight) / 255),
+        (Uint8)((a.g * a_weight + b.g * b_weight) / 255),
+        (Uint8)((a.b * a_weight + b.b * b_weight) / 255),
+        0xFF
+    };
+}
+
+static SDL_Color mapped_color(Uint32 pixel) {
+    SDL_Color color = {0, 0, 0, 0xFF};
+    SDL_GetRGB(pixel, screen->format, &color.r, &color.g, &color.b);
+    return color;
+}
+
+static Uint32 mapped_pixel(SDL_Color color) {
+    return SDL_MapRGB(screen->format, color.r, color.g, color.b);
+}
+
+static void refresh_browser_palette(void) {
+    SDL_Color bg = mapped_color(C_BG);
+    SDL_Color bar = mapped_color(C_BAR);
+    SDL_Color sep = mapped_color(C_SEP);
+    SDL_Color card = mapped_color(C_CARD);
+    SDL_Color card_border = mapped_color(C_CARD_BORDER);
+    const SDL_Color black = {0, 0, 0, 0xFF};
+    const SDL_Color white = {255, 255, 255, 0xFF};
+    int is_light = color_luma(bg) >= 145;
+
+    SDL_Color base, surface, line, raised, muted;
+    if (is_light) {
+        base = mix_color(bg, white, 16);
+        surface = mix_color(card, white, 8);
+        line = mix_color(sep, card_border, 96);
+        raised = mix_color(bar, white, color_luma(bar) < 120 ? 96 : 24);
+        muted = mix_color(SC_DIM, bg, 78);
+        browser_palette.text = color_luma(SC_TEXT) < 150 ? SC_TEXT : mix_color(SC_TEXT, black, 160);
+        browser_palette.secondary = mix_color(browser_palette.text, bg, 92);
+        browser_palette.dim = mix_color(browser_palette.text, bg, 145);
+        browser_palette.dark_text = mix_color(browser_palette.text, black, 40);
+    } else {
+        SDL_Color candidates[] = {bg, bar, card, SC_TEXT, SC_WHITE};
+        SDL_Color darkest = candidates[0];
+        SDL_Color lightest = candidates[0];
+        for (int i = 1; i < (int)(sizeof(candidates) / sizeof(candidates[0])); i++) {
+            if (color_luma(candidates[i]) < color_luma(darkest)) darkest = candidates[i];
+            if (color_luma(candidates[i]) > color_luma(lightest)) lightest = candidates[i];
+        }
+        base = mix_color(darkest, black, 56);
+        surface = mix_color(base, lightest, 12);
+        line = mix_color(base, lightest, 25);
+        raised = mix_color(base, lightest, 40);
+        muted = mix_color(base, lightest, 76);
+        browser_palette.text = lightest;
+        browser_palette.secondary = mix_color(lightest, base, 105);
+        browser_palette.dim = mix_color(lightest, base, 158);
+        browser_palette.dark_text = base;
+    }
+
+    browser_palette.bg = mapped_pixel(base);
+    browser_palette.surface = mapped_pixel(surface);
+    browser_palette.line = mapped_pixel(line);
+    browser_palette.raised = mapped_pixel(raised);
+    browser_palette.muted = mapped_pixel(muted);
+    browser_palette.is_light = is_light;
+
+    const SDL_Color semantic[5] = {
+        {0xFF, 0xAD, 0x33, 0xFF}, {0x3E, 0xCF, 0x6E, 0xFF},
+        {0xA7, 0x8B, 0xFA, 0xFF}, {0xFF, 0x7A, 0x7A, 0xFF},
+        {0x7F, 0xB0, 0xFF, 0xFF}
+    };
+    SDL_Color theme_accent = mapped_color(C_SEL_BORDER);
+    for (int i = 0; i < 5; i++) {
+        SDL_Color accent = mix_color(semantic[i], theme_accent, is_light ? 136 : 104);
+        if (is_light) {
+            for (int step = 0; step < 5 && color_luma(accent) > 132; step++)
+                accent = mix_color(accent, black, 34);
+        } else {
+            for (int step = 0; step < 5 && color_luma(accent) < 145; step++)
+                accent = mix_color(accent, browser_palette.text, 36);
+        }
+        browser_palette.accent[i] = mapped_pixel(accent);
+        browser_palette.accent_text[i] = accent;
+    }
+    browser_palette_ready = 1;
+}
+
+static SDL_Color browser_text(void) {
+    return browser_palette_ready ? browser_palette.text
+                                 : (SDL_Color){0xE8, 0xE6, 0xDF, 0xFF};
+}
+static SDL_Color browser_secondary(void) {
+    return browser_palette_ready ? browser_palette.secondary
+                                 : (SDL_Color){0x8A, 0x8D, 0x98, 0xFF};
+}
+static SDL_Color browser_dim(void) {
+    return browser_palette_ready ? browser_palette.dim
+                                 : (SDL_Color){0x56, 0x5A, 0x64, 0xFF};
+}
+static SDL_Color browser_dark_text(void) {
+    return browser_palette_ready ? browser_palette.dark_text
+                                 : (SDL_Color){0x0E, 0x0F, 0x13, 0xFF};
+}
+
+static Uint32 browser_rgb(Uint8 r, Uint8 g, Uint8 b) {
+    if (browser_palette_ready) {
+        if (r == 0x0E && g == 0x0F && b == 0x13) return browser_palette.bg;
+        if (r == 0x12 && g == 0x14 && b == 0x1A) return browser_palette.surface;
+        if (r == 0x1E && g == 0x21 && b == 0x28) return browser_palette.line;
+        if (r == 0x2B && g == 0x30 && b == 0x3A) return browser_palette.raised;
+        if (r == 0x56 && g == 0x5A && b == 0x64) return browser_palette.muted;
+        if ((r == 0x14 && g == 0x10 && b == 0x08) ||
+            (r == 0x08 && g == 0x14 && b == 0x0C) ||
+            (r == 0x0F && g == 0x0A && b == 0x18) ||
+            (r == 0x14 && g == 0x08 && b == 0x08) ||
+            (r == 0x08 && g == 0x0D && b == 0x16))
+            return browser_palette.bg;
+    }
+    return RGBA(r, g, b);
+}
+
+static Uint32 browser_accent(int category) {
+    if (category < 0 || category > 4) category = 0;
+    if (browser_palette_ready) return browser_palette.accent[category];
+    if (category == 1) return RGBA(0x3E, 0xCF, 0x6E);
+    if (category == 2) return RGBA(0xA7, 0x8B, 0xFA);
+    if (category == 3) return RGBA(0xFF, 0x7A, 0x7A);
+    if (category == 4) return RGBA(0x7F, 0xB0, 0xFF);
+    return RGBA(0xFF, 0xAD, 0x33);
+}
+
+static SDL_Color browser_accent_text(int category) {
+    if (category < 0 || category > 4) category = 0;
+    if (browser_palette_ready) return browser_palette.accent_text[category];
+    if (category == 1) return (SDL_Color){0x3E, 0xCF, 0x6E, 0xFF};
+    if (category == 2) return (SDL_Color){0xA7, 0x8B, 0xFA, 0xFF};
+    if (category == 3) return (SDL_Color){0xFF, 0x7A, 0x7A, 0xFF};
+    if (category == 4) return (SDL_Color){0x7F, 0xB0, 0xFF, 0xFF};
+    return (SDL_Color){0xFF, 0xAD, 0x33, 0xFF};
+}
+
+static Uint32 browser_accent_tint(int category) {
+    SDL_Color tint = mix_color(browser_dark_text(), browser_accent_text(category), 44);
+    return mapped_pixel(tint);
+}
+
+static const char *browser_badge_label(const char *label) {
+    if (!label || !label[0]) return "--";
+    if (strcasecmp(label, "NES") == 0) return "FC";
+    if (strcasecmp(label, "SNES") == 0) return "SFC";
+    if (strcasecmp(label, "GENESIS") == 0 || strcasecmp(label, "GEN") == 0) return "MD";
+    if (strcasecmp(label, "MAME") == 0 || strcasecmp(label, "ADVMAME") == 0 ||
+        strcasecmp(label, "ARCADE") == 0) return "ARC";
+    return label;
+}
+
+static SDL_Color browser_system_color(const char *label) {
+    const char *tag = browser_badge_label(label);
+    if (strcasecmp(tag, "FC") == 0)  return (SDL_Color){0xFF, 0x7A, 0x7A, 0xFF};
+    if (strcasecmp(tag, "SFC") == 0) return (SDL_Color){0xC9, 0xA7, 0xFF, 0xFF};
+    if (strcasecmp(tag, "GB") == 0 || strcasecmp(tag, "GBC") == 0)
+        return (SDL_Color){0x9E, 0xE0, 0x7A, 0xFF};
+    if (strcasecmp(tag, "GBA") == 0) return (SDL_Color){0x7F, 0xB0, 0xFF, 0xFF};
+    if (strcasecmp(tag, "MD") == 0)  return (SDL_Color){0x57, 0xD0, 0x8C, 0xFF};
+    if (strcasecmp(tag, "ARC") == 0) return (SDL_Color){0xFF, 0x8A, 0xC2, 0xFF};
+    return (SDL_Color){0xB4, 0xB8, 0xC2, 0xFF};
+}
+
+static void draw_browser_badge(int x, int y, int w, const char *system, int selected) {
+    SDL_Color col = browser_system_color(system);
+    Uint32 border = browser_rgb(col.r, col.g, col.b);
+    Uint32 inside = selected ? browser_rgb(0x14, 0x10, 0x08)
+                             : browser_rgb(0x12, 0x14, 0x1A);
+    fill_rrect(x, y, w, 22, 2, border);
+    fill_rrect(x + 1, y + 1, w - 2, 20, 1, inside);
+
+    char tag[8];
+    copy_truncated(tag, sizeof(tag), browser_badge_label(system));
+    draw_text_center(font_small, tag, x, w, y + 4, col);
+}
+
+static void draw_browser_header(int category) {
+    static const char *tabs[] = {"MOST PLAYED", "BROWSE", "LIBRARY", "FAVORITES", "SETTINGS"};
+    static const int tab_x[] = {32, 137, 209, 283, 381};
+    static const int tab_w[] = {105, 72, 74, 98, 92};
+
+    fill_rect(0, 0, SCREEN_W, BROWSER_HEADER_H, browser_rgb(0x12, 0x14, 0x1A));
+    fill_rect(0, BROWSER_HEADER_H - 1, SCREEN_W, 1, browser_rgb(0x1E, 0x21, 0x28));
+
+    fill_rrect(5, 17, 22, 18, 2, browser_rgb(0x1E, 0x21, 0x28));
+    draw_text_center(font_small, "L", 5, 22, 19, browser_secondary());
+    fill_rrect(478, 17, 22, 18, 2, browser_rgb(0x1E, 0x21, 0x28));
+    draw_text_center(font_small, "R", 478, 22, 19, browser_secondary());
+
+    for (int i = 0; i < 5; i++) {
+        SDL_Color col = i == category ? browser_accent_text(category) : browser_dim();
+        draw_text_center(font_small, tabs[i], tab_x[i], tab_w[i], 19, col);
+        if (i == category)
+            fill_rect(tab_x[i] + 8, BROWSER_HEADER_H - 3, tab_w[i] - 16, 3,
+                      browser_accent(category));
+    }
+
+    int batt = read_battery();
+    char bstr[12];
+    if (batt >= 0) snprintf(bstr, sizeof(bstr), "%d%%", batt);
+    else snprintf(bstr, sizeof(bstr), "--%%");
+    SDL_Color batt_col = batt >= 0 && batt <= 25
+                         ? (SDL_Color){0xFF, 0x7A, 0x7A, 0xFF}
+                         : browser_secondary();
+    int bw = text_w(font_small, bstr);
+    draw_text(font_small, bstr, 584 - bw, 19, batt_col);
+    fill_rect(592, 18, 32, 16, browser_rgb(0x56, 0x5A, 0x64));
+    fill_rect(594, 20, 28, 12, browser_rgb(0x12, 0x14, 0x1A));
+    if (batt > 0) {
+        int level = (26 * (batt > 100 ? 100 : batt)) / 100;
+        if (level < 1) level = 1;
+        fill_rect(595, 21, level, 10, browser_rgb(batt_col.r, batt_col.g, batt_col.b));
+    }
+    fill_rect(624, 22, 3, 8, browser_rgb(0x56, 0x5A, 0x64));
+}
+
+static int draw_browser_hint(int x, const char *key, const char *label, Uint32 key_col) {
+    int key_w = text_w(font_small, key) + 8;
+    if (key_w < 20) key_w = 20;
+    int y = SCREEN_H - BROWSER_FOOTER_H + 11;
+    fill_rrect(x, y, key_w, 18, 2, key_col);
+    fill_rrect(x + 1, y + 1, key_w - 2, 16, 1, browser_rgb(0x12, 0x14, 0x1A));
+    draw_text_center(font_small, key, x, key_w, y + 2, browser_text());
+    draw_text(font_small, label, x + key_w + 5, y + 2, browser_secondary());
+    return key_w + 5 + text_w(font_small, label) + 16;
+}
+
+static void draw_browser_footer(int mode, int category) {
+    int y = SCREEN_H - BROWSER_FOOTER_H;
+    fill_rect(0, y, SCREEN_W, BROWSER_FOOTER_H, browser_rgb(0x12, 0x14, 0x1A));
+    fill_rect(0, y, SCREEN_W, 1, browser_rgb(0x1E, 0x21, 0x28));
+
+    int x = 14;
+    x += draw_browser_hint(x, "A", mode == 1 || mode == 3 || mode == 6 ? "OPEN" : "PLAY",
+                           browser_rgb(0x3E, 0xCF, 0x6E));
+    if (mode == 2 || mode == 4)
+        x += draw_browser_hint(x, "B", "BACK", browser_rgb(0xFF, 0x7A, 0x7A));
+    if (mode == 2 || mode == 4 || mode == 5)
+        x += draw_browser_hint(x, "Y", "FAV", browser_rgb(0xFF, 0xAD, 0x33));
+    if (mode == 0 || mode == 2 || mode == 4 || mode == 5)
+        draw_browser_hint(x, "X", "OPTS", browser_rgb(0x7F, 0xB0, 0xFF));
+    if (mode == 3)
+        draw_browser_hint(x, "START", "RANDOM", browser_rgb(0xA7, 0x8B, 0xFA));
+
+    draw_browser_hint(505, "L/R", "CATEGORY", browser_accent(category));
+}
+
+static void draw_browser_more(int x, int y, int w, int total, int offset,
+                              int visible, int category) {
+    int remaining = total - offset - visible;
+    char text[24];
+    if (remaining > 0) snprintf(text, sizeof(text), "%d MORE", remaining);
+    else snprintf(text, sizeof(text), "END");
+    draw_text_center(font_small, text, x, w, y, remaining > 0
+                     ? browser_accent_text(category) : browser_dim());
+}
+
+static void draw_genre_glyph(const char *label, int x, int y, Uint32 color) {
+    unsigned int hash = 0;
+    for (const unsigned char *p = (const unsigned char *)label; *p; p++)
+        hash = hash * 33u + *p;
+    if ((hash % 3u) == 0) {
+        fill_rect(x + 4, y, 4, 12, color);
+        fill_rect(x, y + 4, 12, 4, color);
+    } else if ((hash % 3u) == 1) {
+        fill_rect(x + 2, y, 8, 2, color);
+        fill_rect(x, y + 2, 12, 8, color);
+        fill_rect(x + 2, y + 10, 8, 2, color);
+        fill_rect(x + 4, y + 4, 4, 4, browser_rgb(0x12, 0x14, 0x1A));
+    } else {
+        fill_rect(x + 5, y, 2, 12, color);
+        fill_rect(x, y + 5, 12, 2, color);
+        fill_rect(x + 2, y + 2, 8, 8, color);
+    }
+}
+
+static void format_playtime_compact(int secs, char *out, int outlen) {
+    int mins = secs / 60;
+    if (mins >= 60) snprintf(out, outlen, "%dH", mins / 60);
+    else if (mins > 0) snprintf(out, outlen, "%dM", mins);
+    else snprintf(out, outlen, "<1M");
+}
+
+static int library_total_games(void) {
+    int total = 0;
+    for (int i = 0; i < sys_count; i++) total += systems[i].rom_count;
+    return total;
+}
+
+static void draw_most_played_shell(void) {
+    int category = 0;
+    fill_rect(0, 0, SCREEN_W, SCREEN_H, browser_rgb(0x0E, 0x0F, 0x13));
+    draw_browser_header(category);
+    draw_browser_footer(0, category);
+
+    if (most_played_sel < most_played_offset) most_played_offset = most_played_sel;
+    if (most_played_sel >= most_played_offset + BROWSER_ROWS)
+        most_played_offset = most_played_sel - BROWSER_ROWS + 1;
+
+    draw_text(font_small, "PLAY TIME", 18, 61, browser_dim());
+    char count_text[24];
+    snprintf(count_text, sizeof(count_text), "%d GAMES", most_played_count);
+    draw_text(font_small, count_text, SCREEN_W - 18 - text_w(font_small, count_text),
+              61, browser_dim());
+
+    if (most_played_count == 0) {
+        draw_text_center(font_body, "NO PLAY HISTORY YET", 0, SCREEN_W, 212,
+                         browser_secondary());
+        draw_text_center(font_small, "PLAY ACTIVITY WILL APPEAR HERE", 0, SCREEN_W,
+                         244, browser_dim());
+        return;
+    }
+
+    const int y0 = 82;
+    const int row_h = 64;
+    for (int row = 0; row < BROWSER_ROWS && most_played_offset + row < most_played_count; row++) {
+        int idx = most_played_offset + row;
+        int y = y0 + row * row_h;
+        int selected = idx == most_played_sel;
+        if (selected)
+            fill_rect(10, y + 3, SCREEN_W - 20, row_h - 6, browser_accent(category));
+        else
+            fill_rect(18, y + row_h - 1, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+
+        char rank[16];
+        snprintf(rank, sizeof(rank), "%02d", idx + 1);
+        draw_text(font_body, rank, 20, y + 20,
+                  selected ? browser_dark_text() : browser_dim());
+
+        char title[240];
+        truncate_to_fit(font_game, most_played_entries[idx].label, title, sizeof(title), 400);
+        draw_text(font_game, title, 64, y + 16,
+                  selected ? browser_dark_text() : browser_text());
+        draw_browser_badge(486, y + 20, 50, most_played_entries[idx].system, selected);
+
+        char play[16];
+        format_playtime_compact(most_played_entries[idx].play_secs, play, sizeof(play));
+        int pw = text_w(font_body, play);
+        draw_text(font_body, play, 618 - pw, y + 20,
+                  selected ? browser_dark_text() : browser_secondary());
+    }
+    draw_browser_more(0, 414, SCREEN_W, most_played_count, most_played_offset,
+                      BROWSER_ROWS, category);
+}
+
+static void draw_browse_shell(void) {
+    int category = 1;
+    const int left_w = 224;
+    fill_rect(0, 0, SCREEN_W, SCREEN_H, browser_rgb(0x0E, 0x0F, 0x13));
+    draw_browser_header(category);
+    draw_browser_footer(state == STATE_BROWSE_GAMES ? 2 : 1, category);
+    fill_rect(left_w, BROWSER_HEADER_H, 1, BROWSER_BODY_H,
+              browser_rgb(0x1E, 0x21, 0x28));
+
+    draw_text(font_small, "GENRES", 18, 65, browser_dim());
+    draw_text(font_small, "GAMES", left_w + 18, 65, browser_dim());
+
+    if (browse_genre_count == 0) {
+        draw_text_center(font_body, "NO GENRE DATA FOUND", 0, SCREEN_W, 212,
+                         browser_secondary());
+        draw_text_center(font_small, "RUN THE POCKETOS GENRE SCANNER", 0, SCREEN_W,
+                         244, browser_dim());
+        return;
+    }
+
+    if (browse_genre_sel < browse_genre_off) browse_genre_off = browse_genre_sel;
+    if (browse_genre_sel >= browse_genre_off + BROWSER_ROWS)
+        browse_genre_off = browse_genre_sel - BROWSER_ROWS + 1;
+
+    const int left_y0 = 92;
+    for (int row = 0; row < BROWSER_ROWS && browse_genre_off + row < browse_genre_count; row++) {
+        int idx = browse_genre_off + row;
+        int y = left_y0 + row * 56;
+        int selected = idx == browse_genre_sel;
+        int focused = selected && state == STATE_BROWSE_CATS;
+        if (focused)
+            fill_rect(8, y + 3, left_w - 16, 50, browser_accent(category));
+        else if (selected)
+            fill_rect(8, y + 3, left_w - 16, 50, browser_accent_tint(category));
+        else
+            fill_rect(16, y + 55, left_w - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
+
+        Uint32 glyph = focused ? browser_rgb(0x08, 0x14, 0x0C) : browser_accent(category);
+        draw_genre_glyph(browse_genres[idx].label, 18, y + 22, glyph);
+        char label[48];
+        truncate_to_fit(font_body, browse_genres[idx].label, label, sizeof(label), 132);
+        draw_text(font_body, label, 42, y + 18,
+                  focused ? browser_dark_text()
+                          : selected ? browser_accent_text(category) : browser_text());
+        char count[12];
+        snprintf(count, sizeof(count), "%d", browse_genres[idx].count);
+        draw_text(font_small, count, 205 - text_w(font_small, count), y + 20,
+                  focused ? browser_dark_text() : browser_dim());
+    }
+    draw_browser_more(0, 402, left_w, browse_genre_count, browse_genre_off,
+                      BROWSER_ROWS, category);
+
+    BrowseGenre *genre = &browse_genres[browse_genre_sel];
+    char genre_header[80];
+    snprintf(genre_header, sizeof(genre_header), "%s / %d", genre->label, genre->count);
+    char header_fit[80];
+    truncate_to_fit(font_small, genre_header, header_fit, sizeof(header_fit), SCREEN_W - left_w - 104);
+    draw_text(font_small, header_fit, left_w + 72, 65, browser_secondary());
+
+    if (browse_game_sel < browse_game_off) browse_game_off = browse_game_sel;
+    if (browse_game_sel >= browse_game_off + BROWSER_ROWS)
+        browse_game_off = browse_game_sel - BROWSER_ROWS + 1;
+
+    const int right_y0 = 92;
+    for (int row = 0; row < BROWSER_ROWS && browse_game_off + row < genre->count; row++) {
+        int local_idx = browse_game_off + row;
+        int idx = genre->start + local_idx;
+        int y = right_y0 + row * 62;
+        int selected = state == STATE_BROWSE_GAMES && local_idx == browse_game_sel;
+        if (selected)
+            fill_rect(left_w + 8, y + 3, SCREEN_W - left_w - 16, 56, browser_accent(category));
+        else
+            fill_rect(left_w + 16, y + 61, SCREEN_W - left_w - 32, 1,
+                      browser_rgb(0x1E, 0x21, 0x28));
+
+        int title_x = left_w + 18;
+        if (is_favorite(browse_game_pool[idx].path)) {
+            fill_rect(title_x, y + 27, 6, 6,
+                      selected ? browser_rgb(0x08, 0x14, 0x0C) : browser_accent(category));
+            title_x += 14;
+        }
+        char title[240];
+        truncate_to_fit(font_game, browse_game_pool[idx].title, title, sizeof(title),
+                        568 - title_x);
+        draw_text(font_game, title, title_x, y + 15,
+                  selected ? browser_dark_text() : browser_text());
+        draw_browser_badge(580, y + 20, 44, browse_game_pool[idx].system, selected);
+    }
+    draw_browser_more(left_w, 414, SCREEN_W - left_w, genre->count,
+                      browse_game_off, BROWSER_ROWS, category);
+}
+
+static void draw_library_shell(void) {
+    int category = 2;
+    const int left_w = 260;
+    fill_rect(0, 0, SCREEN_W, SCREEN_H, browser_rgb(0x0E, 0x0F, 0x13));
+    draw_browser_header(category);
+    draw_browser_footer(state == STATE_GAMES ? 4 : 3, category);
+    fill_rect(left_w, BROWSER_HEADER_H, 1, BROWSER_BODY_H,
+              browser_rgb(0x1E, 0x21, 0x28));
+
+    draw_text(font_small, "SYSTEMS", 18, 65, browser_dim());
+    char total[32];
+    snprintf(total, sizeof(total), "%d GAMES", library_total_games());
+    draw_text(font_small, total, left_w - 18 - text_w(font_small, total), 65, browser_dim());
+    draw_text(font_small, sys_count > 0 ? system_full_name(systems[sys_sel].label) : "GAMES",
+              left_w + 18, 65, browser_secondary());
+
+    if (sys_sel < sys_offset) sys_offset = sys_sel;
+    if (sys_sel >= sys_offset + LIBRARY_SYS_ROWS)
+        sys_offset = sys_sel - LIBRARY_SYS_ROWS + 1;
+
+    const int left_y0 = 92;
+    for (int row = 0; row < LIBRARY_SYS_ROWS && sys_offset + row < sys_count; row++) {
+        int idx = sys_offset + row;
+        int y = left_y0 + row * 54;
+        int selected = idx == sys_sel;
+        int focused = selected && state == STATE_SYSTEMS;
+        if (focused)
+            fill_rect(8, y + 3, left_w - 16, 48, browser_accent(category));
+        else if (selected)
+            fill_rect(8, y + 3, left_w - 16, 48, browser_accent_tint(category));
+        else
+            fill_rect(16, y + 53, left_w - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
+
+        char label[64];
+        truncate_to_fit(font_body, library_system_name(systems[idx].label), label,
+                        sizeof(label), 190);
+        draw_text(font_body, label, 18, y + 16,
+                  focused ? browser_dark_text()
+                          : selected ? browser_accent_text(category) : browser_text());
+        char count[12];
+        snprintf(count, sizeof(count), "%d", systems[idx].rom_count);
+        draw_text(font_small, count, 242 - text_w(font_small, count), y + 18,
+                  focused ? browser_dark_text() : browser_dim());
+    }
+    if (sys_count > LIBRARY_SYS_ROWS)
+        draw_browser_more(0, 421, left_w, sys_count, sys_offset,
+                          LIBRARY_SYS_ROWS, category);
+
+    if (game_sel < game_offset) game_offset = game_sel;
+    if (game_sel >= game_offset + BROWSER_ROWS)
+        game_offset = game_sel - BROWSER_ROWS + 1;
+
+    if (game_count == 0) {
+        draw_text_center(font_body, "NO GAMES FOUND", left_w, SCREEN_W - left_w,
+                         218, browser_secondary());
+        draw_text_center(font_small, "CHECK THIS SYSTEM'S ROM FOLDER", left_w,
+                         SCREEN_W - left_w, 250, browser_dim());
+        return;
+    }
+
+    const int right_y0 = 92;
+    for (int row = 0; row < BROWSER_ROWS && game_offset + row < game_count; row++) {
+        int idx = game_offset + row;
+        int y = right_y0 + row * 62;
+        int selected = state == STATE_GAMES && idx == game_sel;
+        if (selected)
+            fill_rect(left_w + 8, y + 3, SCREEN_W - left_w - 16, 56, browser_accent(category));
+        else
+            fill_rect(left_w + 16, y + 61, SCREEN_W - left_w - 32, 1,
+                      browser_rgb(0x1E, 0x21, 0x28));
+
+        int title_x = left_w + 18;
+        if (is_favorite(games[idx].path)) {
+            fill_rect(title_x, y + 27, 6, 6,
+                      selected ? browser_rgb(0x0F, 0x0A, 0x18) : browser_accent(category));
+            title_x += 14;
+        }
+        char title[240];
+        truncate_to_fit(font_game, games[idx].name, title, sizeof(title),
+                        SCREEN_W - title_x - 18);
+        draw_text(font_game, title, title_x, y + 15,
+                  selected ? browser_dark_text() : browser_text());
+    }
+    draw_browser_more(left_w, 414, SCREEN_W - left_w, game_count, game_offset,
+                      BROWSER_ROWS, category);
+}
+
+static void draw_favorites_shell(void) {
+    int category = 3;
+    fill_rect(0, 0, SCREEN_W, SCREEN_H, browser_rgb(0x0E, 0x0F, 0x13));
+    draw_browser_header(category);
+    draw_browser_footer(5, category);
+
+    if (favorite_sel < favorite_offset) favorite_offset = favorite_sel;
+    if (favorite_sel >= favorite_offset + BROWSER_ROWS)
+        favorite_offset = favorite_sel - BROWSER_ROWS + 1;
+
+    draw_text(font_small, "SAVED GAMES", 18, 61, browser_dim());
+    char count_text[24];
+    snprintf(count_text, sizeof(count_text), "%d FAVORITES", favorite_count);
+    draw_text(font_small, count_text, SCREEN_W - 18 - text_w(font_small, count_text),
+              61, browser_dim());
+
+    if (favorite_count == 0) {
+        draw_text_center(font_body, "NO FAVORITES YET", 0, SCREEN_W, 212,
+                         browser_secondary());
+        draw_text_center(font_small, "PRESS Y ON A GAME TO ADD IT", 0, SCREEN_W,
+                         244, browser_dim());
+        return;
+    }
+
+    const int y0 = 82;
+    const int row_h = 64;
+    for (int row = 0; row < BROWSER_ROWS && favorite_offset + row < favorite_count; row++) {
+        int idx = favorite_offset + row;
+        int y = y0 + row * row_h;
+        int selected = idx == favorite_sel;
+        if (selected)
+            fill_rect(10, y + 3, SCREEN_W - 20, row_h - 6, browser_accent(category));
+        else
+            fill_rect(18, y + row_h - 1, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+
+        fill_rect(22, y + 27, 8, 8,
+                  selected ? browser_rgb(0x14, 0x08, 0x08) : browser_accent(category));
+        char title[240];
+        truncate_to_fit(font_game, favorite_entries[idx].label, title, sizeof(title), 414);
+        draw_text(font_game, title, 48, y + 16,
+                  selected ? browser_dark_text() : browser_text());
+        draw_browser_badge(548, y + 20, 56, favorite_entries[idx].system, selected);
+    }
+    draw_browser_more(0, 414, SCREEN_W, favorite_count, favorite_offset,
+                      BROWSER_ROWS, category);
+}
+
+static const char *SETTINGS_HUB_LABELS[] = {
+    "Apps", "Settings", "Device Info", "About PocketOS", "Sleep"
+};
+static const char *SETTINGS_HUB_SUBTITLES[] = {
+    "TOOLS AND UTILITIES", "DISPLAY, AUDIO, CONTROLS", "HARDWARE AND STORAGE",
+    "VERSION AND CREDITS", "SUSPEND THE DEVICE"
+};
+static const char *SETTINGS_HUB_TAGS[] = {"AP", "ST", "DV", "OS", "ZZ"};
+#define SETTINGS_HUB_COUNT 5
+
+static void draw_settings_hub_shell(void) {
+    int category = 4;
+    int selected = home_sel_sec[2];
+    fill_rect(0, 0, SCREEN_W, SCREEN_H, browser_rgb(0x0E, 0x0F, 0x13));
+    draw_browser_header(category);
+    draw_browser_footer(6, category);
+    draw_text(font_small, "SYSTEM", 18, 61, browser_dim());
+    draw_text(font_small, "POCKETOS " POCKETOS_VERSION,
+              SCREEN_W - 18 - text_w(font_small, "POCKETOS " POCKETOS_VERSION),
+              61, browser_dim());
+
+    const int y0 = 82;
+    const int row_h = 64;
+    for (int row = 0; row < SETTINGS_HUB_COUNT; row++) {
+        int y = y0 + row * row_h;
+        int is_selected = row == selected;
+        if (is_selected)
+            fill_rect(10, y + 3, SCREEN_W - 20, row_h - 6, browser_accent(category));
+        else
+            fill_rect(18, y + row_h - 1, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+
+        Uint32 tag_bg = is_selected ? browser_rgb(0x08, 0x0D, 0x16)
+                                    : browser_rgb(0x1E, 0x21, 0x28);
+        fill_rrect(20, y + 16, 40, 28, 2, tag_bg);
+        draw_text_center(font_small, SETTINGS_HUB_TAGS[row], 20, 40, y + 23,
+                         is_selected ? browser_text() : browser_accent_text(category));
+        draw_text(font_body, SETTINGS_HUB_LABELS[row], 78, y + 10,
+                  is_selected ? browser_dark_text() : browser_text());
+        draw_text(font_small, SETTINGS_HUB_SUBTITLES[row], 80, y + 37,
+                  is_selected ? browser_dark_text() : browser_dim());
+        draw_chevron(610, y + 32, 7, 2,
+                      is_selected ? browser_rgb(0x08, 0x0D, 0x16)
+                                  : browser_rgb(0x56, 0x5A, 0x64));
+    }
+}
+
+__attribute__((unused)) static void draw_browse(void) {
     fill_rect(0, CONTENT_Y, SCREEN_W, CONTENT_H, C_BG);
     draw_status();
     draw_hint_base();
@@ -3378,95 +4248,237 @@ static void draw_browse(void) {
                        bg->count, GAME_ROWS, browse_game_off);
 }
 
-/* Keep these as thin wrappers so render dispatch still compiles */
-static void draw_browse_cats(void)  { draw_browse(); }
-static void draw_browse_games(void) { draw_browse(); }
+/* Keep state-specific wrappers for render dispatch and modal backdrops. */
+static void draw_browse_cats(void)  { draw_browse_shell(); }
+static void draw_browse_games(void) { draw_browse_shell(); }
+
+static void open_browser_category(int category) {
+    browser_category = (category + 5) % 5;
+    switch (browser_category) {
+    case 0:
+        load_most_played();
+        state = STATE_MOST_PLAYED;
+        break;
+    case 1:
+        if (browse_genre_count == 0) load_browse_data();
+        state = STATE_BROWSE_CATS;
+        break;
+    case 2:
+        if (sys_count > 0) load_games(sys_sel);
+        state = STATE_SYSTEMS;
+        break;
+    case 3:
+        load_favorites();
+        state = STATE_FAVORITES;
+        break;
+    default:
+        home_section = 2;
+        state = STATE_HOME;
+        break;
+    }
+}
+
+static void cycle_browser_category(int delta) {
+    play_move();
+    open_browser_category(browser_category + delta);
+}
+
+static int selected_browse_entry(PlayEntry *entry) {
+    if (!entry || browse_genre_sel < 0 || browse_genre_sel >= browse_genre_count)
+        return 0;
+    BrowseGenre *genre = &browse_genres[browse_genre_sel];
+    if (browse_game_sel < 0 || browse_game_sel >= genre->count) return 0;
+    BrowseGame *game = &browse_game_pool[genre->start + browse_game_sel];
+    System *sys = find_system_for_rompath(game->path);
+    if (!sys) {
+        log_kv("browse entry: no system match for", game->path);
+        return 0;
+    }
+
+    memset(entry, 0, sizeof(*entry));
+    copy_truncated(entry->label, sizeof(entry->label), game->title);
+    copy_truncated(entry->rompath, sizeof(entry->rompath), game->path);
+    snprintf(entry->launch, sizeof(entry->launch), "%s/launch.sh", sys->emu_dir);
+    system_from_launch(entry->launch, entry->system, sizeof(entry->system));
+    return 1;
+}
 
 static void on_browse_cats_key(SDLKey k) {
+    if (k == BTN_L1) { cycle_browser_category(-1); return; }
+    if (k == BTN_R1) { cycle_browser_category(1); return; }
+    if (k == BTN_MENU) { open_browser_category(4); return; }
+    if (browse_genre_count <= 0) return;
+
     int before = browse_genre_sel;
     if (k == BTN_UP   && browse_genre_sel > 0)                    browse_genre_sel--;
     if (k == BTN_DOWN && browse_genre_sel < browse_genre_count-1) browse_genre_sel++;
-    if (k == BTN_L1)  browse_genre_sel = (browse_genre_sel - PANEL_ROWS < 0) ? 0 : browse_genre_sel - PANEL_ROWS;
-    if (k == BTN_R1)  browse_genre_sel = (browse_genre_sel + PANEL_ROWS >= browse_genre_count) ? browse_genre_count-1 : browse_genre_sel + PANEL_ROWS;
+    if (k == BTN_L2)  browse_genre_sel = (browse_genre_sel - BROWSER_ROWS < 0) ? 0 : browse_genre_sel - BROWSER_ROWS;
+    if (k == BTN_R2)  browse_genre_sel = (browse_genre_sel + BROWSER_ROWS >= browse_genre_count) ? browse_genre_count-1 : browse_genre_sel + BROWSER_ROWS;
     if (browse_genre_sel != before) { play_move(); browse_game_sel = 0; browse_game_off = 0; }
     if (k == BTN_A || k == BTN_RIGHT) {
         play_select();
         browse_game_sel = 0; browse_game_off = 0;
         state = STATE_BROWSE_GAMES;
     }
-    if (k == BTN_B || k == BTN_LEFT || k == BTN_MENU) {
-        play_back(); state = STATE_HOME;
+    if (k == BTN_B || k == BTN_LEFT) {
+        play_back(); open_browser_category(0);
     }
 }
 
 static void on_browse_games_key(SDLKey k) {
+    if (k == BTN_L1) { cycle_browser_category(-1); return; }
+    if (k == BTN_R1) { cycle_browser_category(1); return; }
+    if (k == BTN_MENU) { open_browser_category(4); return; }
     if (browse_genre_sel < 0 || browse_genre_sel >= browse_genre_count) { state = STATE_BROWSE_CATS; return; }
     BrowseGenre *bg = &browse_genres[browse_genre_sel];
+    if (bg->count <= 0) { state = STATE_BROWSE_CATS; return; }
     int before = browse_game_sel;
     if (k == BTN_UP   && browse_game_sel > 0)            browse_game_sel--;
     if (k == BTN_DOWN && browse_game_sel < bg->count-1)  browse_game_sel++;
-    if (k == BTN_L1)  browse_game_sel = (browse_game_sel - GAME_ROWS < 0) ? 0 : browse_game_sel - GAME_ROWS;
-    if (k == BTN_R1)  browse_game_sel = (browse_game_sel + GAME_ROWS >= bg->count) ? bg->count-1 : browse_game_sel + GAME_ROWS;
+    if (k == BTN_L2)  browse_game_sel = (browse_game_sel - BROWSER_ROWS < 0) ? 0 : browse_game_sel - BROWSER_ROWS;
+    if (k == BTN_R2)  browse_game_sel = (browse_game_sel + BROWSER_ROWS >= bg->count) ? bg->count-1 : browse_game_sel + BROWSER_ROWS;
     if (browse_game_sel < browse_game_off) browse_game_off = browse_game_sel;
     if (browse_game_sel >= browse_game_off + GAME_ROWS)  browse_game_off = browse_game_sel - GAME_ROWS + 1;
     if (browse_game_sel != before) play_move();
     if (k == BTN_A || k == BTN_RIGHT) {
-        int gi = bg->start + browse_game_sel;
-        BrowseGame *g = &browse_game_pool[gi];
-        /* Find the matching system by ROM folder name, not display label */
-        System *sys = NULL;
-        for (int si = 0; si < sys_count; si++) {
-            const char *rbase = strrchr(systems[si].rom_dir, '/');
-            rbase = rbase ? rbase + 1 : systems[si].rom_dir;
-            if (strcasecmp(rbase, g->system) == 0) {
-                sys = &systems[si]; break;
-            }
-        }
-        if (!sys) { log_kv("browse launch: no system match for", g->system); return; }
-        PlayEntry pe = {0};
-        strncpy(pe.label,   g->title,  sizeof(pe.label)-1);
-        strncpy(pe.rompath, g->path,   sizeof(pe.rompath)-1);
-        strncpy(pe.system,  g->system, sizeof(pe.system)-1);
-        snprintf(pe.launch, sizeof(pe.launch), "%s/launch.sh", sys->emu_dir);
-        launch_entry(&pe);
+        PlayEntry entry;
+        if (selected_browse_entry(&entry)) launch_entry(&entry);
     }
-    if (k == BTN_B || k == BTN_LEFT || k == BTN_MENU) {
+    if (k == BTN_Y) {
+        PlayEntry entry;
+        if (selected_browse_entry(&entry)) {
+            toggle_favorite(entry.label, entry.rompath, entry.launch);
+            play_select();
+        }
+    }
+    if (k == BTN_X) {
+        PlayEntry entry;
+        if (selected_browse_entry(&entry))
+            enter_game_options(entry.label, entry.rompath, entry.launch,
+                               entry.system, STATE_BROWSE_GAMES);
+    }
+    if (k == BTN_B || k == BTN_LEFT) {
         play_back(); state = STATE_BROWSE_CATS;
     }
 }
 
+static void draw_secondary_header(const char *parent, const char *title) {
+    fill_rect(0, 0, SCREEN_W, BROWSER_HEADER_H, browser_rgb(0x12, 0x14, 0x1A));
+    fill_rect(0, BROWSER_HEADER_H - 1, SCREEN_W, 1, browser_rgb(0x1E, 0x21, 0x28));
+
+    fill_rrect(14, 17, 22, 18, 2, browser_rgb(0x2B, 0x30, 0x3A));
+    draw_text_center(font_small, "B", 14, 22, 19, browser_secondary());
+    draw_text(font_small, parent, 46, 19, browser_dim());
+    int parent_end = 46 + text_w(font_small, parent);
+    fill_rect(parent_end + 12, 17, 1, 18, browser_rgb(0x2B, 0x30, 0x3A));
+    draw_text(font_small, title, parent_end + 26, 19, browser_text());
+
+    int batt = read_battery();
+    char bstr[12];
+    if (batt >= 0) snprintf(bstr, sizeof(bstr), "%d%%", batt);
+    else snprintf(bstr, sizeof(bstr), "--%%");
+    SDL_Color batt_col = batt >= 0 && batt <= 25
+                         ? (SDL_Color){0xFF, 0x7A, 0x7A, 0xFF}
+                         : browser_secondary();
+    int bw = text_w(font_small, bstr);
+    draw_text(font_small, bstr, 584 - bw, 19, batt_col);
+    fill_rect(592, 18, 32, 16, browser_rgb(0x56, 0x5A, 0x64));
+    fill_rect(594, 20, 28, 12, browser_rgb(0x12, 0x14, 0x1A));
+    if (batt > 0) {
+        int level = (26 * (batt > 100 ? 100 : batt)) / 100;
+        if (level < 1) level = 1;
+        fill_rect(595, 21, level, 10, browser_rgb(batt_col.r, batt_col.g, batt_col.b));
+    }
+    fill_rect(624, 22, 3, 8, browser_rgb(0x56, 0x5A, 0x64));
+}
+
+static void draw_secondary_frame(const char *parent, const char *title,
+                                 const char *meta) {
+    fill_rect(0, 0, SCREEN_W, SCREEN_H, browser_rgb(0x0E, 0x0F, 0x13));
+    draw_secondary_header(parent, title);
+    if (meta && meta[0]) {
+        draw_text(font_small, meta, 18, 64, browser_dim());
+        fill_rect(18, 81, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+    }
+}
+
+/* 0=open, 1=change/adjust, 2=apply, 3=back only, 4=select/options. */
+static void draw_secondary_footer(int mode) {
+    int y = SCREEN_H - BROWSER_FOOTER_H;
+    fill_rect(0, y, SCREEN_W, BROWSER_FOOTER_H, browser_rgb(0x12, 0x14, 0x1A));
+    fill_rect(0, y, SCREEN_W, 1, browser_rgb(0x1E, 0x21, 0x28));
+
+    int x = 14;
+    if (mode != 3) {
+        const char *label = mode == 0 ? "OPEN" : mode == 1 ? "CHANGE" :
+                            mode == 2 ? "APPLY" : "SELECT";
+        x += draw_browser_hint(x, "A", label, browser_rgb(0x3E, 0xCF, 0x6E));
+    }
+    x += draw_browser_hint(x, "B", "BACK", browser_rgb(0xFF, 0x7A, 0x7A));
+    if (mode == 1)
+        draw_browser_hint(x, "L/R", "ADJUST", browser_accent(4));
+    if (mode == 4)
+        draw_browser_hint(x, "X", "OPTS", browser_accent(4));
+    if (mode == 0 || mode == 2)
+        draw_browser_hint(x, "L2/R2", "PAGE", browser_accent(4));
+}
+
+static void app_initials(const char *label, char out[3]) {
+    int n = 0;
+    int at_word = 1;
+    for (const unsigned char *p = (const unsigned char *)label; *p && n < 2; p++) {
+        if (isalnum(*p) && at_word) {
+            out[n++] = (char)toupper(*p);
+            at_word = 0;
+        } else if (!isalnum(*p)) {
+            at_word = 1;
+        }
+    }
+    if (n == 1) {
+        for (const unsigned char *p = (const unsigned char *)label + 1; *p; p++) {
+            if (isalnum(*p)) { out[n++] = (char)toupper(*p); break; }
+        }
+    }
+    out[n] = '\0';
+}
+
 static void draw_apps(void) {
-    draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
-    draw_status();
-    draw_hint_base();
-    draw_hints_row("Open", "Back", NULL, NULL, NULL, NULL, NULL);
+    char meta[24];
+    snprintf(meta, sizeof(meta), "%d INSTALLED", APP_COUNT);
+    draw_secondary_frame("SETTINGS", "APPS", meta);
+    draw_secondary_footer(0);
 
-    /* clamp scroll */
     if (app_sel < app_offset) app_offset = app_sel;
-    if (app_sel >= app_offset + HOME_VISIBLE) app_offset = app_sel - HOME_VISIBLE + 1;
+    if (app_sel >= app_offset + BROWSER_ROWS) app_offset = app_sel - BROWSER_ROWS + 1;
 
-    for (int row = 0; row < HOME_VISIBLE && app_offset + row < APP_COUNT; row++) {
+    for (int row = 0; row < BROWSER_ROWS && app_offset + row < APP_COUNT; row++) {
         int i   = app_offset + row;
-        int iy  = CONTENT_Y + row * HOME_ITEM_H;
+        int iy  = 82 + row * 64;
         int sel = (i == app_sel);
 
         if (sel)
-            draw_select_asset(6, iy + 3, SCREEN_W - 20, HOME_ITEM_H - 6);
+            fill_rect(10, iy + 3, SCREEN_W - 20, 58, browser_accent(4));
         else
-            fill_rect(12, iy + HOME_ITEM_H - 1, SCREEN_W - 24, 1, C_SEP);
+            fill_rect(18, iy + 63, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
 
-        if (!draw_asset(APP_ENTRIES[i].icon, 14, iy + (HOME_ITEM_H - 82) / 2, 82, 82))
-            draw_builtin_icon(APP_ENTRIES[i].icon, 14, iy + (HOME_ITEM_H - 82) / 2, 82, 82, sel);
+        char initials[3];
+        app_initials(APP_ENTRIES[i].label, initials);
+        Uint32 icon_bg = sel ? browser_rgb(0x0E, 0x0F, 0x13)
+                             : browser_rgb(0x2B, 0x30, 0x3A);
+        fill_rrect(20, iy + 14, 40, 36, 3, icon_bg);
+        draw_text_center(font_small, initials, 20, 40, iy + 24,
+                         sel ? browser_accent_text(4) : browser_secondary());
 
-        draw_text(font_large, APP_ENTRIES[i].label, 110, iy + (HOME_ITEM_H - 30) / 2,
-                  sel ? SC_WHITE : SC_TEXT);
+        char label[128];
+        truncate_to_fit(font_game, APP_ENTRIES[i].label, label, sizeof(label), 500);
+        draw_text(font_game, label, 78, iy + 16,
+                  sel ? browser_dark_text() : browser_text());
 
-        Uint32 chev_col = sel ? RGBA(SC_WHITE.r, SC_WHITE.g, SC_WHITE.b) : C_SEP;
-        draw_chevron(SCREEN_W - 32, iy + HOME_ITEM_H / 2, 8, 2, chev_col);
+        Uint32 chev_col = sel ? browser_rgb(0x0E, 0x0F, 0x13)
+                              : browser_rgb(0x56, 0x5A, 0x64);
+        draw_chevron(SCREEN_W - 28, iy + 32, 7, 2, chev_col);
     }
-
-    draw_scrollbar(SCREEN_W - 10, CONTENT_Y + 8, CONTENT_H - 16,
-                   APP_COUNT, HOME_VISIBLE, app_offset);
+    draw_browser_more(0, 414, SCREEN_W, APP_COUNT, app_offset, BROWSER_ROWS, 4);
 }
 
 // ── Info panel (Device / About) ───────────────────────────────────────────────
@@ -3483,10 +4495,26 @@ static void read_first_line(const char *path, char *out, int outlen) {
     fclose(f);
 }
 
+static void read_command_line(const char *command, char *out, int outlen) {
+    out[0] = '\0';
+    FILE *pipe = popen(command, "r");
+    if (!pipe) return;
+    if (fgets(out, outlen, pipe)) {
+        int n = strlen(out);
+        while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r' ||
+                         out[n - 1] == ' ' || out[n - 1] == '\t'))
+            out[--n] = '\0';
+    }
+    pclose(pipe);
+}
+
 static void draw_info_row(int x, int y, int w, const char *label, const char *value) {
-    draw_text(font_body, label, x, y, SC_DIM);
-    int vw = text_w(font_body, value);
-    draw_text(font_body, value, x + w - vw, y, SC_TEXT);
+    char label_fit[96], value_fit[160];
+    truncate_to_fit(font_body, label, label_fit, sizeof(label_fit), w / 2 - 12);
+    truncate_to_fit(font_body, value, value_fit, sizeof(value_fit), w / 2 + 12);
+    draw_text(font_body, label_fit, x, y, browser_secondary());
+    int vw = text_w(font_body, value_fit);
+    draw_text(font_body, value_fit, x + w - vw, y, browser_text());
 }
 
 // ── Game Options panel ─────────────────────────────────────────────────────────
@@ -3516,96 +4544,86 @@ static void enter_game_options(const char *name, const char *path,
 }
 
 static void draw_game_options(void) {
-    /* Render background state behind the overlay */
+    int category = 2;
     switch (game_opts_back) {
     case STATE_GAMES:
-        draw_panel();
+        draw_library_shell();
+        category = 2;
+        break;
+    case STATE_BROWSE_GAMES:
+        draw_browse_shell();
+        category = 1;
         break;
     case STATE_FAVORITES:
-        draw_entry_list("Favorites", favorite_entries, favorite_count,
-                        &favorite_sel, &favorite_offset, 1);
+        draw_favorites_shell();
+        category = 3;
         break;
     case STATE_RECENT:
         draw_entry_list("Recent", recent_entries, recent_count,
                         &recent_sel, &recent_offset, 0);
+        category = 4;
         break;
     case STATE_MOST_PLAYED:
-        draw_entry_list("Most Played", most_played_entries, most_played_count,
-                        &most_played_sel, &most_played_offset, 0);
+        draw_most_played_shell();
+        category = 0;
         break;
     default:
-        draw_panel();
+        draw_library_shell();
         break;
     }
 
-    /* Dim content behind the card */
     if (g_dim_overlay)
         SDL_BlitSurface(g_dim_overlay, NULL, screen, NULL);
     else
         fill_rect_alpha(0, 0, SCREEN_W, SCREEN_H, 140);
 
-    int cw  = 520;
-    int ch  = (game_opts_mode == 0) ? 300 : 340;
-    int cx  = (SCREEN_W - cw) / 2;
-    int cy  = (SCREEN_H - ch) / 2;
-    int pad = 20;
-    int inner_x = cx + pad;
-    int inner_w = cw - pad * 2;
+    const int cx = 60;
+    const int cy = 66;
+    const int cw = 520;
+    const int ch = 350;
+    const int inner_x = cx + 20;
+    const int inner_w = cw - 40;
+    fill_rrect(cx, cy, cw, ch, 5, browser_rgb(0x2B, 0x30, 0x3A));
+    fill_rrect(cx + 1, cy + 1, cw - 2, ch - 2, 4, browser_rgb(0x12, 0x14, 0x1A));
+    fill_rect(cx + 1, cy + 1, cw - 2, 3, browser_accent(category));
 
-    draw_panel_asset(cx, cy, cw, ch);
-
-    /* Header band with game title */
-    fill_rrect(cx, cy, cw, 52, 4, C_SEL_BORDER);
-    char hdr[80];
-    strncpy(hdr, game_opts_name, sizeof(hdr) - 1);
-    hdr[sizeof(hdr)-1] = '\0';
-    while (strlen(hdr) > 4 && text_w(font_body, hdr) > inner_w - 8) {
-        hdr[strlen(hdr)-1] = '\0';
-    }
-    if (strlen(hdr) < strlen(game_opts_name) && strlen(hdr) > 3) {
-        size_t tl = strlen(hdr);
-        hdr[tl > 3 ? tl - 3 : 0] = '\0';
-        strncat(hdr, "...", sizeof(hdr) - strlen(hdr) - 1);
-    }
-    draw_text_center(font_body, hdr, cx, cw, cy + 16, SC_WHITE);
-
-    fill_rect(cx + 12, cy + 56, cw - 24, 1, C_SEP);
+    const char *panel_title = game_opts_mode == 0 ? "GAME OPTIONS" :
+                              game_opts_mode == 1 ? "ROM INFO" : "SAVE INFO";
+    draw_text(font_small, panel_title, inner_x, cy + 18, browser_accent_text(category));
+    char hdr[120];
+    truncate_to_fit(font_game, game_opts_name, hdr, sizeof(hdr), inner_w - 76);
+    draw_text(font_game, hdr, inner_x, cy + 42, browser_text());
+    draw_browser_badge(cx + cw - 70, cy + 38, 50, game_opts_system, 0);
+    fill_rect(inner_x, cy + 76, inner_w, 1, browser_rgb(0x2B, 0x30, 0x3A));
 
     if (game_opts_mode == 0) {
-        /* ── Action menu ── */
-        draw_hint_base();
-        draw_hints_row("Select", "Back", NULL, NULL, NULL, NULL, NULL);
-
         const char *items[GOPTS_COUNT];
-        items[GOPTS_LAUNCH]   = "Launch";
+        items[GOPTS_LAUNCH]   = "Launch Game";
         items[GOPTS_FAVORITE] = is_favorite(game_opts_path)
-                                ? "\xe2\x98\x85  Unfavorite"
-                                : "\xe2\x98\x86  Add to Favorites";
+                                ? "Remove from Favorites"
+                                : "Add to Favorites";
         items[GOPTS_ROM_INFO]  = "ROM Info";
         items[GOPTS_SAVE_INFO] = "Save Info";
 
-        int row_h = 52;
-        int ry = cy + 68;
+        const int row_h = 58;
+        int ry = cy + 88;
         for (int i = 0; i < GOPTS_COUNT; i++) {
             int sel = (i == game_opts_sel);
-            if (sel) {
-                fill_rrect(inner_x - 6, ry + 4, inner_w + 12, row_h - 8,
-                           3, C_SEL_BORDER);
-                fill_rrect(inner_x - 5, ry + 5, inner_w + 10, row_h - 10,
-                           2, C_SEL_HI);
-            }
-            SDL_Color col = sel ? SC_WHITE : SC_TEXT;
-            draw_text(font_body, items[i], inner_x + 8, ry + (row_h - 22) / 2, col);
+            if (sel)
+                fill_rect(inner_x, ry + 3, inner_w, row_h - 6, browser_accent(category));
+            else
+                fill_rect(inner_x + 8, ry + row_h - 1, inner_w - 16, 1,
+                          browser_rgb(0x1E, 0x21, 0x28));
+            draw_text(font_body, items[i], inner_x + 14, ry + 18,
+                      sel ? browser_dark_text() : browser_text());
+            draw_chevron(inner_x + inner_w - 18, ry + row_h / 2, 7, 2,
+                         sel ? browser_rgb(0x0E, 0x0F, 0x13)
+                             : browser_rgb(0x56, 0x5A, 0x64));
             ry += row_h;
         }
-
     } else if (game_opts_mode == 1) {
-        /* ── ROM Info ── */
-        draw_hint_base();
-        draw_hints_row(NULL, "Back", NULL, NULL, NULL, NULL, NULL);
-
-        int row_h = 40;
-        int ry = cy + 68;
+        const int row_h = 54;
+        int ry = cy + 104;
 
         const char *slash = strrchr(game_opts_path, '/');
         const char *fname = slash ? slash + 1 : game_opts_path;
@@ -3634,11 +4652,10 @@ static void draw_game_options(void) {
             ry += row_h;
         }
 
-        /* Truncated path */
-        char pathbuf[64];
+        char pathbuf[96];
         int plen = strlen(game_opts_path);
-        if (plen > 48)
-            snprintf(pathbuf, sizeof(pathbuf), "...%s", game_opts_path + plen - 45);
+        if (plen > 72)
+            snprintf(pathbuf, sizeof(pathbuf), "...%s", game_opts_path + plen - 69);
         else {
             strncpy(pathbuf, game_opts_path, sizeof(pathbuf) - 1);
             pathbuf[sizeof(pathbuf)-1] = '\0';
@@ -3646,12 +4663,8 @@ static void draw_game_options(void) {
         draw_info_row(inner_x, ry, inner_w, "Path", pathbuf);
 
     } else {
-        /* ── Save Info ── */
-        draw_hint_base();
-        draw_hints_row(NULL, "Back", NULL, NULL, NULL, NULL, NULL);
-
-        int row_h = 40;
-        int ry = cy + 68;
+        const int row_h = 54;
+        int ry = cy + 104;
 
         char saves_dir[512];
         snprintf(saves_dir, sizeof(saves_dir),
@@ -3674,8 +4687,8 @@ static void draw_game_options(void) {
                     ent->d_name[rlen] != '\0' &&
                     ent->d_name[0] != '.') {
                     char save_path[600];
-                    snprintf(save_path, sizeof(save_path),
-                             "%s/%s", saves_dir, ent->d_name);
+                    if (!path_join(save_path, sizeof(save_path), saves_dir, ent->d_name))
+                        continue;
                     struct stat st;
                     if (stat(save_path, &st) == 0) {
                         char tmbuf[32];
@@ -3690,10 +4703,11 @@ static void draw_game_options(void) {
             closedir(dp);
         }
         if (!found) {
-            draw_text_center(font_body, "No saves found.", cx, cw,
-                             ry + 10, SC_DIM);
+            draw_text_center(font_body, "NO SAVES FOUND", cx, cw,
+                             ry + 60, browser_secondary());
         }
     }
+    draw_secondary_footer(game_opts_mode == 0 ? 5 : 3);
 }
 
 static void on_game_options_key(SDLKey k) {
@@ -3743,40 +4757,12 @@ static void on_game_options_key(SDLKey k) {
 }
 
 static void draw_info_panel(void) {
-    /* Dim the settings list behind the panel */
-    if (g_dim_overlay)
-        SDL_BlitSurface(g_dim_overlay, NULL, screen, NULL);
-    else
-        fill_rect_alpha(0, 0, SCREEN_W, SCREEN_H, 140);
-    draw_status();
-
-    /* Card geometry */
-    int cw = 520, ch = 300;
-    int cx = (SCREEN_W - cw) / 2;
-    int cy = (SCREEN_H - ch) / 2;
-    int pad = 20;
-    int inner_x = cx + pad;
-    int inner_w = cw - pad * 2;
-    int row_h   = 38;
-
-    /* Card background */
-    draw_panel_asset(cx, cy, cw, ch);
-
-    /* Header band */
-    fill_rrect(cx, cy, cw, 52, 4, C_SEL_BORDER);
-    const char *title = info_panel_about ? "POCKET OS" : "DEVICE INFO";
-    draw_text_center(font_large, title, cx, cw, cy + 12, SC_WHITE);
-
-    /* Separator */
-    fill_rect(cx + 12, cy + 56, cw - 24, 1, C_SEP);
-
-    int ry = cy + 68;
-
+    const char *labels[4];
+    char values[4][160];
+    memset(values, 0, sizeof(values));
     if (!info_panel_about) {
-        /* ── Device / Miyoo info ── */
         char model_s[32], fw[64], onion[64], kernel[128];
 
-        /* Model */
         FILE *f = fopen("/tmp/deviceModel", "r");
         int model = 0;
         if (f) { if (fscanf(f, "%d", &model) != 1) model = 0; fclose(f); }
@@ -3784,21 +4770,23 @@ static void draw_info_panel(void) {
                  model == 354 ? "Miyoo Mini Plus" :
                  model == 283 ? "Miyoo Mini" : "Miyoo (unknown)");
 
-        /* Firmware */
-        read_first_line("/tmp/firmwareVersion", fw, sizeof(fw));
-        if (!fw[0]) read_first_line(POCKETOS_ROOT "/miyoo/app/version", fw, sizeof(fw));
-        if (!fw[0]) snprintf(fw, sizeof(fw), "Unknown");
+        read_first_line(FIRMWARE_VERSION_PATH, fw, sizeof(fw));
+        if (!fw[0])
+            read_command_line("/etc/fw_printenv miyoo_version 2>/dev/null",
+                              fw, sizeof(fw));
+        const char *fw_prefix = "miyoo_version=";
+        if (strncmp(fw, fw_prefix, strlen(fw_prefix)) == 0)
+            memmove(fw, fw + strlen(fw_prefix),
+                    strlen(fw + strlen(fw_prefix)) + 1);
+        if (!fw[0]) snprintf(fw, sizeof(fw), "Not reported");
 
-        /* Onion OS version */
-        read_first_line(POCKETOS_ROOT "/.tmp_update/onion-version", onion, sizeof(onion));
-        if (!onion[0]) read_first_line(POCKETOS_ROOT "/onion-version", onion, sizeof(onion));
-        if (!onion[0]) snprintf(onion, sizeof(onion), "Unknown");
+        read_first_line(POCKETOS_ROOT "/.tmp_update/onionVersion/version.txt",
+                        onion, sizeof(onion));
+        if (!onion[0]) snprintf(onion, sizeof(onion), "%s", ONION_BASE_VERSION);
 
-        /* Kernel (first word after "version" in /proc/version) */
         char proc_ver[256];
         read_first_line("/proc/version", proc_ver, sizeof(proc_ver));
         kernel[0] = '\0';
-        /* extract version token: "Linux version X.Y.Z-..." */
         char *vp = strstr(proc_ver, "version ");
         if (vp) {
             vp += 8;
@@ -3809,13 +4797,15 @@ static void draw_info_panel(void) {
         }
         if (!kernel[0]) snprintf(kernel, sizeof(kernel), "Unknown");
 
-        draw_info_row(inner_x, ry,            inner_w, "Model",     model_s);
-        draw_info_row(inner_x, ry + row_h,    inner_w, "Firmware",  fw);
-        draw_info_row(inner_x, ry + row_h*2,  inner_w, "Onion OS",  onion);
-        draw_info_row(inner_x, ry + row_h*3,  inner_w, "Kernel",    kernel);
-
+        labels[0] = "MODEL";
+        labels[1] = "FIRMWARE";
+        labels[2] = "ONION BASE";
+        labels[3] = "KERNEL";
+        snprintf(values[0], sizeof(values[0]), "%s", model_s);
+        snprintf(values[1], sizeof(values[1]), "%s", fw);
+        snprintf(values[2], sizeof(values[2]), "%s", onion);
+        snprintf(values[3], sizeof(values[3]), "%s", kernel);
     } else {
-        /* ── Pocket OS about ── */
         char theme_label[64] = "Default";
         char font_label[64]  = "Default";
 
@@ -3836,27 +4826,37 @@ static void draw_info_panel(void) {
             if (dot) *dot = '\0';
         }
 
-        draw_info_row(inner_x, ry,           inner_w, "Version",  "1.0");
-        draw_info_row(inner_x, ry + row_h,   inner_w, "Platform", "Miyoo Mini+");
-        draw_info_row(inner_x, ry + row_h*2, inner_w, "Theme",    theme_label);
-        draw_info_row(inner_x, ry + row_h*3, inner_w, "Font",     font_label);
+        labels[0] = "VERSION";
+        labels[1] = "PLATFORM";
+        labels[2] = "THEME";
+        labels[3] = "FONT";
+        snprintf(values[0], sizeof(values[0]), "%s", POCKETOS_VERSION);
+        snprintf(values[1], sizeof(values[1]), "Miyoo Mini+");
+        snprintf(values[2], sizeof(values[2]), "%s", theme_label);
+        snprintf(values[3], sizeof(values[3]), "%s", font_label);
     }
 
-    /* Bottom separator + hint */
-    fill_rect(cx + 12, cy + ch - 40, cw - 24, 1, C_SEP);
-    draw_hint_base();
-    draw_hints_row(NULL, "Back", NULL, NULL, NULL, NULL, NULL);
+    draw_secondary_frame("SETTINGS", info_panel_about ? "ABOUT" : "DEVICE INFO",
+                         info_panel_about ? "POCKETOS" : "SYSTEM INFORMATION");
+    draw_secondary_footer(3);
+    for (int i = 0; i < 4; i++) {
+        int y = 90 + i * 78;
+        draw_text(font_small, labels[i], 20, y + 8, browser_dim());
+        char value[160];
+        truncate_to_fit(font_game, values[i], value, sizeof(value), SCREEN_W - 72);
+        draw_text(font_game, value, 20, y + 31, browser_text());
+        fill_rect(20, y + 76, SCREEN_W - 40, 1, browser_rgb(0x1E, 0x21, 0x28));
+    }
 }
 
 static void on_info_panel_key(SDLKey k) {
     if (k == BTN_B || k == BTN_MENU || k == BTN_A) {
         play_back();
-        state = STATE_SETTINGS;
+        state = info_panel_back;
     }
 }
 
 static void draw_settings(void) {
-    /* Rebuild cached value strings if stale (only on first draw after entry/change) */
     if (!settings_val_valid) {
         for (int i = 0; i < SETTINGS_COUNT; i++) {
             if (!SETTINGS_ENTRIES[i].is_header) {
@@ -3868,123 +4868,93 @@ static void draw_settings(void) {
         settings_val_valid = 1;
     }
 
-    draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
-    draw_status();
-    draw_hint_base();
-    draw_hints_row("Change", "Back", "L", "R", "Adjust", NULL, NULL);
+    draw_secondary_frame("SETTINGS", "PREFERENCES", NULL);
+    draw_secondary_footer(1);
 
-    int clip_top    = CONTENT_Y;
-    int clip_bottom = CONTENT_Y + CONTENT_H;
+    const int clip_top = BROWSER_HEADER_H;
+    const int clip_bottom = SCREEN_H - BROWSER_FOOTER_H;
 
-    /* Clip all item drawing to the content region so icons/text
-     * never bleed into the status bar or hint bar when scrolling. */
-    SDL_Rect content_clip = { 0, CONTENT_Y, SCREEN_W, CONTENT_H };
+    SDL_Rect content_clip = {0, clip_top, SCREEN_W, BROWSER_BODY_H};
     SDL_SetClipRect(screen, &content_clip);
 
-    /* Walk all rows; skip those fully outside the viewport */
     for (int i = 0; i < SETTINGS_COUNT; i++) {
         int rh  = settings_row_h(i);
-        int ry  = CONTENT_Y + settings_row_top(i) - settings_scroll_px;
+        int ry  = clip_top + settings_row_top(i) - settings_scroll_px;
 
-        if (ry + rh <= clip_top)    continue;  /* above viewport */
-        if (ry      >= clip_bottom) break;     /* below viewport */
+        if (ry + rh <= clip_top) continue;
+        if (ry >= clip_bottom) break;
 
         if (SETTINGS_ENTRIES[i].is_header) {
-            /* Section header: lavender band + small-caps label */
             int band_y = ry;
             int band_h = rh;
-            if (band_y < clip_top)            { band_h -= clip_top - band_y; band_y = clip_top; }
+            if (band_y < clip_top) { band_h -= clip_top - band_y; band_y = clip_top; }
             if (band_y + band_h > clip_bottom) band_h = clip_bottom - band_y;
-            fill_rect(0, band_y, SCREEN_W, band_h, C_PANEL_HI);
-            fill_rect(0, band_y + band_h - 1, SCREEN_W, 1, C_DIVIDER);
-            /* Draw label only if top of text is visible */
+            fill_rect(0, band_y, SCREEN_W, band_h, browser_rgb(0x12, 0x14, 0x1A));
+            fill_rect(0, band_y + band_h - 1, SCREEN_W, 1,
+                      browser_rgb(0x1E, 0x21, 0x28));
             int lbl_y = ry + (rh - 14) / 2;
             if (lbl_y >= clip_top && lbl_y + 14 <= clip_bottom)
-                draw_text(font_small, SETTINGS_ENTRIES[i].label, 14, lbl_y, SC_HDR);
+                draw_text(font_small, SETTINGS_ENTRIES[i].label, 18, lbl_y,
+                          browser_accent_text(4));
         } else {
             int is_sel = (i == settings_sel);
             if (is_sel)
-                draw_select_asset(6, ry + 3, SCREEN_W - 20, HOME_ITEM_H - 6);
+                fill_rect(8, ry + 2, SCREEN_W - 16, rh - 4, browser_accent(4));
             else
-                fill_rect(12, ry + HOME_ITEM_H - 1, SCREEN_W - 24, 1, C_SEP);
+                fill_rect(18, ry + rh - 1, SCREEN_W - 36, 1,
+                          browser_rgb(0x1E, 0x21, 0x28));
 
-            int icon_y = ry + (HOME_ITEM_H - 72) / 2;
-            if (SETTINGS_ENTRIES[i].icon) {
-                if (!draw_asset(SETTINGS_ENTRIES[i].icon, 14, icon_y, 72, 72))
-                    draw_builtin_icon(SETTINGS_ENTRIES[i].icon, 14, icon_y, 72, 72, is_sel);
-            }
-
-            draw_text(font_large, SETTINGS_ENTRIES[i].label,
-                      110, ry + (HOME_ITEM_H - 30) / 2, is_sel ? SC_WHITE : SC_TEXT);
+            char setting_label[96];
+            truncate_to_fit(font_body, SETTINGS_ENTRIES[i].label, setting_label,
+                            sizeof(setting_label), 330);
+            draw_text(font_body, setting_label, 20, ry + 17,
+                      is_sel ? browser_dark_text() : browser_text());
 
             const char *value = settings_val_cache[i];
-            SDL_Color value_col = is_sel ? SC_WHITE : SC_DIM;
-
-            /* Right panel: x=450 to x=600 (150px), chevron at 608 */
-            int rp_x = 450;
-            int rp_w = SCREEN_W - rp_x - 40;   /* 150px content width */
-            int mid  = ry + HOME_ITEM_H / 2;
+            SDL_Color value_col = is_sel ? browser_dark_text() : browser_secondary();
+            const int rp_x = 420;
+            const int rp_w = 170;
+            const int mid = ry + rh / 2;
 
             int mv = setting_max_val(SETTINGS_ENTRIES[i].kind);
             if (mv > 0) {
-                /* Numeric: value text (font_body) above, wide progress bar below */
                 int cv  = settings_num_cache[i];
                 int vw  = text_w(font_body, value);
-                int vy  = mid - 26;   /* upper half — text sits above center */
-                int by  = mid + 6;    /* lower half — bar sits below center */
-                int bh  = 10;
-
-                draw_text(font_body, value, rp_x + rp_w - vw, vy, value_col);
-
-                /* Track: thin flat line */
-                int mid_y = by + bh / 2;
-                fill_rrect(rp_x, mid_y - 2, rp_w, 4, 2, C_SEP);
-                /* Fill: wedge via scanlines — smooth diagonal edges, no staircase.
-                 * Wedge left tip = wmin px tall, right edge = bh px tall.
-                 * For each row, find the x where the diagonal edge begins. */
+                draw_text(font_body, value, rp_x + rp_w - vw, ry + 7, value_col);
+                fill_rrect(rp_x, ry + 38, rp_w, 4, 2,
+                           browser_rgb(0x2B, 0x30, 0x3A));
                 int fw = (rp_w * cv) / mv;
-                if (fw > 0) {
-                    int wmin = 3;
-                    int half_max = bh / 2;
-                    int half_min = wmin / 2;
-                    for (int row = 0; row < bh; row++) {
-                        int dy = row - half_max;                /* signed dist from centre */
-                        int ady = dy < 0 ? -dy : dy;
-                        /* x where this row enters the wedge (left diagonal edge) */
-                        int x0 = 0;
-                        if (ady > half_min) {
-                            /* linear interp: at x=0 half-height=half_min, at x=fw half-height=half_max */
-                            x0 = (fw * (ady - half_min)) / (half_max - half_min + 1);
-                        }
-                        if (x0 >= fw) continue;
-                        fill_rect(rp_x + x0, mid_y - half_max + row, fw - x0, 1, C_SEL_BORDER);
-                    }
-                }
+                if (fw > 0)
+                    fill_rrect(rp_x, ry + 37, fw, 6, 2,
+                               is_sel ? browser_rgb(0x0E, 0x0F, 0x13)
+                                      : browser_accent(4));
             } else {
-                /* Toggle / text: single large value, vertically centred */
-                int vw = text_w(font_body, value);
-                draw_text(font_body, value, rp_x + rp_w - vw,
-                          mid - 11, value_col);
+                char value_fit[96];
+                truncate_to_fit(font_body, value, value_fit, sizeof(value_fit), rp_w);
+                int vw = text_w(font_body, value_fit);
+                draw_text(font_body, value_fit, rp_x + rp_w - vw, mid - 11, value_col);
             }
 
-            Uint32 chev_col = is_sel ? RGBA(SC_WHITE.r, SC_WHITE.g, SC_WHITE.b) : C_SEP;
-            draw_chevron(SCREEN_W - 32, mid, 8, 2, chev_col);
+            draw_chevron(SCREEN_W - 24, mid, 7, 2,
+                         is_sel ? browser_rgb(0x0E, 0x0F, 0x13)
+                                : browser_rgb(0x56, 0x5A, 0x64));
         }
     }
 
-    SDL_SetClipRect(screen, NULL);  /* restore full-screen clip */
+    SDL_SetClipRect(screen, NULL);
 
-    /* Scrollbar: thumb position based on pixel scroll */
     int total_h = total_settings_height();
-    int max_scroll = total_h - CONTENT_H;
+    int max_scroll = total_h - BROWSER_BODY_H;
     if (max_scroll > 0) {
-        int track_h = CONTENT_H - 16;
-        int thumb_h = (track_h * CONTENT_H) / total_h;
+        int track_h = BROWSER_BODY_H - 16;
+        int thumb_h = (track_h * BROWSER_BODY_H) / total_h;
         if (thumb_h < 14) thumb_h = 14;
         int travel = track_h - thumb_h;
-        int thumb_y = CONTENT_Y + 8 + (travel * settings_scroll_px) / max_scroll;
-        fill_rect(SCREEN_W - 10, CONTENT_Y + 8, 4, track_h, C_SEP);
-        fill_rrect(SCREEN_W - 10, thumb_y, 4, thumb_h, 2, C_SEL_BORDER);
+        int thumb_y = BROWSER_HEADER_H + 8 +
+                      (travel * settings_scroll_px) / max_scroll;
+        fill_rect(SCREEN_W - 6, BROWSER_HEADER_H + 8, 2, track_h,
+                  browser_rgb(0x2B, 0x30, 0x3A));
+        fill_rrect(SCREEN_W - 7, thumb_y, 4, thumb_h, 2, browser_accent(4));
     }
 }
 
@@ -3993,21 +4963,20 @@ static void draw_settings(void) {
 static void render(void) {
     switch (state) {
     case STATE_HOME:
-        draw_home();
+        draw_settings_hub_shell();
         break;
     case STATE_SYSTEMS:
     case STATE_GAMES:
-        draw_panel();
+        draw_library_shell();
         break;
     case STATE_RECENT:
         draw_entry_list("Recent", recent_entries, recent_count, &recent_sel, &recent_offset, 0);
         break;
     case STATE_FAVORITES:
-        draw_entry_list("Favorites", favorite_entries, favorite_count, &favorite_sel, &favorite_offset, 1);
+        draw_favorites_shell();
         break;
     case STATE_MOST_PLAYED:
-        draw_entry_list("Most Played", most_played_entries, most_played_count,
-                        &most_played_sel, &most_played_offset, 0);
+        draw_most_played_shell();
         break;
     case STATE_APPS:
         draw_apps();
@@ -4028,7 +4997,8 @@ static void render(void) {
         draw_browse_games();
         break;
     case STATE_INFO_PANEL:
-        draw_settings();   /* settings list behind the card */
+        if (info_panel_back == STATE_HOME) draw_settings_hub_shell();
+        else draw_settings();
         draw_info_panel();
         break;
     case STATE_GAME_OPTIONS:
@@ -4038,67 +5008,55 @@ static void render(void) {
     draw_screenshot_toast();
     SDL_BlitSurface(screen, NULL, video, NULL);
     SDL_Flip(video);
+    {
+        static int screenshot_saved = 0;
+        if (!screenshot_saved) {
+            const char *path = getenv("POCKETOS_SCREENSHOT_PATH");
 #ifdef POCKETOS_SCREENSHOT
-    { static int _saved = 0; if (!_saved) { SDL_SaveBMP(screen, POCKETOS_SCREENSHOT); _saved = 1; } }
+            if (!path || !path[0]) path = POCKETOS_SCREENSHOT;
 #endif
+            if (path && path[0]) {
+                SDL_SaveBMP(screen, path);
+                screenshot_saved = 1;
+            }
+        }
+    }
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 
 static void on_home_key(SDLKey k) {
-    /* L1/R1 always cycle sections */
-    if (k == BTN_L1) {
-        home_section = (home_section + 2) % 3;
-        play_move();
-        return;
-    }
-    if (k == BTN_R1) {
-        home_section = (home_section + 1) % 3;
-        play_move();
-        return;
-    }
+    if (k == BTN_L1) { cycle_browser_category(-1); return; }
+    if (k == BTN_R1) { cycle_browser_category(1); return; }
 
-    /* Section 0 = BROWSE: navigate genres directly */
-    if (home_section == 0) {
-        if (browse_genre_count == 0) {
-            LogTimer _t = log_timer_begin("load_browse_data");
-            load_browse_data();
-            log_timer_end(_t);
-        }
-        if (!browse_genre_count) return;
-        int before = browse_genre_sel;
-        if (k == BTN_UP)   browse_genre_sel = (browse_genre_sel - 1 + browse_genre_count) % browse_genre_count;
-        if (k == BTN_DOWN) browse_genre_sel = (browse_genre_sel + 1) % browse_genre_count;
-        if (browse_genre_sel != before) { play_move(); browse_game_sel = 0; browse_game_off = 0; }
-        if (k == BTN_A || k == BTN_RIGHT) {
-            play_select();
-            browse_game_sel = 0; browse_game_off = 0;
-            state = STATE_BROWSE_GAMES;
-        }
-        return;
-    }
-
-    int count  = HOME_SEC_COUNT[home_section];
-    int *sel   = &home_sel_sec[home_section];
-    int  before = *sel;
-
-    if (k == BTN_UP   && *sel > 0)         (*sel)--;
-    if (k == BTN_DOWN && *sel < count - 1) (*sel)++;
+    int *sel = &home_sel_sec[2];
+    int before = *sel;
+    if (k == BTN_UP)   *sel = (*sel - 1 + SETTINGS_HUB_COUNT) % SETTINGS_HUB_COUNT;
+    if (k == BTN_DOWN) *sel = (*sel + 1) % SETTINGS_HUB_COUNT;
     if (*sel != before) play_move();
 
-    if (k == BTN_A || k == BTN_RIGHT) {
-        play_select();
-        switch (HOME_SECTIONS[home_section][*sel].action) {
-        case 1: load_recent();    state = STATE_RECENT;    break;
-        case 2:
-            load_games(sys_sel);
-            if (game_count > 0) state = STATE_GAMES;
-            break;
-        case 4: state = STATE_APPS; break;
-        case 5: open_settings_kind("display"); break;
-        case 6: exec_power_cmd("echo mem > /sys/power/state"); break;
-        case 7: load_most_played(); state = STATE_MOST_PLAYED; break;
-        }
+    if (k != BTN_A && k != BTN_RIGHT) return;
+    play_select();
+    switch (*sel) {
+    case 0:
+        state = STATE_APPS;
+        break;
+    case 1:
+        open_settings_kind("display");
+        break;
+    case 2:
+        info_panel_about = 0;
+        info_panel_back = STATE_HOME;
+        state = STATE_INFO_PANEL;
+        break;
+    case 3:
+        info_panel_about = 1;
+        info_panel_back = STATE_HOME;
+        state = STATE_INFO_PANEL;
+        break;
+    default:
+        exec_power_cmd("echo mem > /sys/power/state");
+        break;
     }
 }
 
@@ -4129,10 +5087,68 @@ static void on_entry_key(SDLKey k, PlayEntry *entries, int count, int *sel,
     (void)offset;
 }
 
+static void on_most_played_key(SDLKey k) {
+    if (k == BTN_L1) { cycle_browser_category(-1); return; }
+    if (k == BTN_R1) { cycle_browser_category(1); return; }
+    if (k == BTN_MENU) { open_browser_category(4); return; }
+    if (most_played_count <= 0) return;
+
+    int before = most_played_sel;
+    if (k == BTN_UP)   most_played_sel = (most_played_sel - 1 + most_played_count) % most_played_count;
+    if (k == BTN_DOWN) most_played_sel = (most_played_sel + 1) % most_played_count;
+    if (k == BTN_L2)
+        most_played_sel = most_played_sel - BROWSER_ROWS < 0 ? 0 : most_played_sel - BROWSER_ROWS;
+    if (k == BTN_R2)
+        most_played_sel = most_played_sel + BROWSER_ROWS >= most_played_count
+                          ? most_played_count - 1 : most_played_sel + BROWSER_ROWS;
+    if (most_played_sel != before) play_move();
+
+    PlayEntry *entry = &most_played_entries[most_played_sel];
+    if (k == BTN_A || k == BTN_RIGHT) launch_entry(entry);
+    if (k == BTN_Y) {
+        toggle_favorite(entry->label, entry->rompath, entry->launch);
+        play_select();
+    }
+    if (k == BTN_X)
+        enter_game_options(entry->label, entry->rompath, entry->launch,
+                           entry->system, STATE_MOST_PLAYED);
+}
+
+static void on_favorites_key(SDLKey k) {
+    if (k == BTN_L1) { cycle_browser_category(-1); return; }
+    if (k == BTN_R1) { cycle_browser_category(1); return; }
+    if (k == BTN_MENU) { open_browser_category(4); return; }
+    if (favorite_count <= 0) return;
+
+    int before = favorite_sel;
+    if (k == BTN_UP)   favorite_sel = (favorite_sel - 1 + favorite_count) % favorite_count;
+    if (k == BTN_DOWN) favorite_sel = (favorite_sel + 1) % favorite_count;
+    if (k == BTN_L2)
+        favorite_sel = favorite_sel - BROWSER_ROWS < 0 ? 0 : favorite_sel - BROWSER_ROWS;
+    if (k == BTN_R2)
+        favorite_sel = favorite_sel + BROWSER_ROWS >= favorite_count
+                       ? favorite_count - 1 : favorite_sel + BROWSER_ROWS;
+    if (favorite_sel != before) play_move();
+
+    PlayEntry entry = favorite_entries[favorite_sel];
+    if (k == BTN_A || k == BTN_RIGHT) launch_entry(&entry);
+    if (k == BTN_Y) {
+        toggle_favorite(entry.label, entry.rompath, entry.launch);
+        play_select();
+    }
+    if (k == BTN_X)
+        enter_game_options(entry.label, entry.rompath, entry.launch,
+                           entry.system, STATE_FAVORITES);
+}
+
 static void on_apps_key(SDLKey k) {
     int before = app_sel;
     if (k == BTN_UP   && app_sel > 0)              app_sel--;
     if (k == BTN_DOWN && app_sel < APP_COUNT - 1)  app_sel++;
+    if (k == BTN_L2) app_sel = app_sel - BROWSER_ROWS < 0
+                                  ? 0 : app_sel - BROWSER_ROWS;
+    if (k == BTN_R2) app_sel = app_sel + BROWSER_ROWS >= APP_COUNT
+                                  ? APP_COUNT - 1 : app_sel + BROWSER_ROWS;
     if (app_sel != before) play_move();
     if (k == BTN_A) {
         if (strcmp(APP_ENTRIES[app_sel].label, "Settings") == 0 ||
@@ -4152,45 +5168,59 @@ static void on_apps_key(SDLKey k) {
 }
 
 static void draw_font_picker(void) {
-    draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
-    draw_status();
-    draw_hint_base();
-    draw_hints_row("Select", "Cancel", NULL, NULL, NULL, NULL, NULL);
+    char meta[24];
+    snprintf(meta, sizeof(meta), "%d AVAILABLE", font_list_count);
+    draw_secondary_frame("SETTINGS", "FONT", meta);
+    draw_secondary_footer(2);
 
     if (font_pick_sel < font_pick_offset) font_pick_offset = font_pick_sel;
-    if (font_pick_sel >= font_pick_offset + HOME_VISIBLE) font_pick_offset = font_pick_sel - HOME_VISIBLE + 1;
+    if (font_pick_sel >= font_pick_offset + BROWSER_ROWS)
+        font_pick_offset = font_pick_sel - BROWSER_ROWS + 1;
 
-    for (int row = 0; row < HOME_VISIBLE && font_pick_offset + row < font_list_count; row++) {
+    if (font_list_count == 0) {
+        draw_text_center(font_body, "NO FONTS FOUND", 0, SCREEN_W, 216,
+                         browser_secondary());
+        return;
+    }
+
+    for (int row = 0; row < BROWSER_ROWS && font_pick_offset + row < font_list_count; row++) {
         int i   = font_pick_offset + row;
-        int iy  = CONTENT_Y + row * HOME_ITEM_H;
+        int iy  = 82 + row * 64;
         int sel = (i == font_pick_sel);
 
         if (sel)
-            draw_select_asset(6, iy + 3, SCREEN_W - 20, HOME_ITEM_H - 6);
+            fill_rect(10, iy + 3, SCREEN_W - 20, 58, browser_accent(4));
         else
-            fill_rect(12, iy + HOME_ITEM_H - 1, SCREEN_W - 24, 1, C_SEP);
+            fill_rect(18, iy + 63, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
 
-        /* Strip extension for display */
         char label[64];
         strncpy(label, font_list_name[i], sizeof(label) - 1);
         label[sizeof(label) - 1] = '\0';
         char *dot = strrchr(label, '.');
         if (dot) *dot = '\0';
 
-        draw_text(font_large, label, 20, iy + (HOME_ITEM_H - 30) / 2, SC_TEXT);
+        char label_fit[64];
+        truncate_to_fit(font_game, label, label_fit, sizeof(label_fit), 520);
+        draw_text(font_game, label_fit, 20, iy + 16,
+                  sel ? browser_dark_text() : browser_text());
 
-        Uint32 chev_col = sel ? C_SEL_BORDER : C_SEP;
-        draw_chevron(SCREEN_W - 32, iy + HOME_ITEM_H / 2, 8, 2, chev_col);
+        draw_chevron(SCREEN_W - 28, iy + 32, 7, 2,
+                     sel ? browser_rgb(0x0E, 0x0F, 0x13)
+                         : browser_rgb(0x56, 0x5A, 0x64));
     }
-
-    draw_scrollbar(SCREEN_W - 10, CONTENT_Y + 8, CONTENT_H - 16,
-                   font_list_count, HOME_VISIBLE, font_pick_offset);
+    draw_browser_more(0, 414, SCREEN_W, font_list_count, font_pick_offset,
+                      BROWSER_ROWS, 4);
 }
 
 static void on_font_picker_key(SDLKey k) {
     int before = font_pick_sel;
     if (k == BTN_UP   && font_pick_sel > 0)                    font_pick_sel--;
     if (k == BTN_DOWN && font_pick_sel < font_list_count - 1)  font_pick_sel++;
+    if (k == BTN_L2) font_pick_sel = font_pick_sel - BROWSER_ROWS < 0
+                                         ? 0 : font_pick_sel - BROWSER_ROWS;
+    if (k == BTN_R2 && font_list_count > 0)
+        font_pick_sel = font_pick_sel + BROWSER_ROWS >= font_list_count
+                        ? font_list_count - 1 : font_pick_sel + BROWSER_ROWS;
     if (font_pick_sel != before) {
         play_move();
         apply_font_index(font_pick_sel);
@@ -4218,50 +5248,132 @@ static void scan_themes(void) {
         const char *ext = strrchr(n, '.');
         if (!ext || strcmp(ext, ".json") != 0) continue;
         snprintf(theme_list_path[theme_list_count], 512, "%s/%s", ASSET_ROOT, n);
-        snprintf(theme_list_name[theme_list_count], sizeof(theme_list_name[0]), "%s", n);
+        copy_truncated(theme_list_name[theme_list_count],
+                       sizeof(theme_list_name[0]), n);
         theme_list_count++;
     }
     closedir(d);
+
+    for (int i = 1; i < theme_list_count; i++) {
+        for (int j = i; j > 0 && strcasecmp(theme_list_name[j - 1],
+                                             theme_list_name[j]) > 0; j--) {
+            char name[64], path[512];
+            memcpy(name, theme_list_name[j - 1], sizeof(name));
+            memcpy(path, theme_list_path[j - 1], sizeof(path));
+            memcpy(theme_list_name[j - 1], theme_list_name[j], sizeof(name));
+            memcpy(theme_list_path[j - 1], theme_list_path[j], sizeof(path));
+            memcpy(theme_list_name[j], name, sizeof(name));
+            memcpy(theme_list_path[j], path, sizeof(path));
+        }
+    }
+}
+
+static int theme_palette_matches(const char *a_path, const char *b_path) {
+    static const char *keys[] = {"bg", "bar", "sel", "sel_border", "text", "white"};
+    for (int i = 0; i < (int)(sizeof(keys) / sizeof(keys[0])); i++) {
+        char a[24], b[24];
+        if (!json_str(a_path, keys[i], a, sizeof(a)) ||
+            !json_str(b_path, keys[i], b, sizeof(b)) ||
+            strcasecmp(a, b) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+static int current_theme_index(void) {
+    char current[512];
+    snprintf(current, sizeof(current), "%s/theme.json", ASSET_ROOT);
+    if (access(current, R_OK) == 0) {
+        for (int i = 0; i < theme_list_count; i++) {
+            if (theme_palette_matches(current, theme_list_path[i])) return i;
+        }
+    }
+    for (int i = 0; i < theme_list_count; i++) {
+        if (strcasecmp(theme_list_name[i], "theme_cream.json") == 0) return i;
+    }
+    return theme_list_count > 0 ? 0 : -1;
+}
+
+static ThemePalette capture_theme_palette(void) {
+    ThemePalette p = {
+        C_BG, C_BAR, C_SEP, C_SEL, C_PANEL_HDR,
+        C_DIVIDER, C_CARD, C_CARD_BORDER,
+        C_SEL_HI, C_SEL_BORDER, C_PANEL_HI,
+        SC_TEXT, SC_WHITE, SC_DIM, SC_SUB_SEL, SC_HDR
+    };
+    return p;
+}
+
+static void restore_theme_palette(const ThemePalette *p) {
+    C_BG = p->bg; C_BAR = p->bar; C_SEP = p->sep; C_SEL = p->sel;
+    C_PANEL_HDR = p->panel_hdr; C_DIVIDER = p->divider; C_CARD = p->card;
+    C_CARD_BORDER = p->card_border; C_SEL_HI = p->sel_hi;
+    C_SEL_BORDER = p->sel_border; C_PANEL_HI = p->panel_hi;
+    SC_TEXT = p->text; SC_WHITE = p->white; SC_DIM = p->dim;
+    SC_SUB_SEL = p->sub_sel; SC_HDR = p->hdr;
+    refresh_browser_palette();
+}
+
+static void preview_theme_index(int idx) {
+    if (idx < 0 || idx >= theme_list_count) return;
+    if (theme_preview_active) restore_theme_palette(&theme_preview_original);
+    load_theme_file(theme_list_path[idx], NULL, 0);
+    refresh_browser_palette();
 }
 
 static void apply_theme_index(int idx) {
     if (idx < 0 || idx >= theme_list_count) return;
-    /* Copy preset to active theme.json */
     char dst[512];
     snprintf(dst, sizeof(dst), "%s/theme.json", ASSET_ROOT);
     FILE *src = fopen(theme_list_path[idx], "r");
-    if (!src) return;
+    if (!src) {
+        log_errno_msg("theme preset open failed", theme_list_path[idx]);
+        return;
+    }
     char buf[4096] = {0};
     int n = (int)fread(buf, 1, sizeof(buf) - 1, src);
+    int read_ok = !ferror(src) && feof(src);
     fclose(src);
-    FILE *out = fopen(dst, "w");
-    if (!out) return;
+    if (!read_ok) {
+        log_kv("theme preset too large or unreadable", theme_list_path[idx]);
+        return;
+    }
+    char tmp[sizeof(dst) + 8];
+    FILE *out = open_atomic_file(dst, tmp, sizeof(tmp));
+    if (!out) {
+        log_errno_msg("theme write failed", dst);
+        return;
+    }
     fwrite(buf, 1, n, out);
-    fclose(out);
-    /* Reload colors */
-    char dummy[8];
-    load_theme(dummy, sizeof(dummy));
+    if (!commit_atomic_file(out, tmp, dst)) return;
+    preview_theme_index(idx);
 }
 
 static void draw_theme_picker(void) {
-    draw_textured_bg(0, CONTENT_Y, SCREEN_W, CONTENT_H);
-    draw_status();
-    draw_hint_base();
-    draw_hints_row("Select", "Cancel", NULL, NULL, NULL, NULL, NULL);
+    char meta[24];
+    snprintf(meta, sizeof(meta), "%d AVAILABLE", theme_list_count);
+    draw_secondary_frame("SETTINGS", "THEME", meta);
+    draw_secondary_footer(2);
 
     if (theme_pick_sel < theme_pick_offset) theme_pick_offset = theme_pick_sel;
-    if (theme_pick_sel >= theme_pick_offset + HOME_VISIBLE)
-        theme_pick_offset = theme_pick_sel - HOME_VISIBLE + 1;
+    if (theme_pick_sel >= theme_pick_offset + BROWSER_ROWS)
+        theme_pick_offset = theme_pick_sel - BROWSER_ROWS + 1;
 
-    for (int row = 0; row < HOME_VISIBLE && theme_pick_offset + row < theme_list_count; row++) {
+    if (theme_list_count == 0) {
+        draw_text_center(font_body, "NO THEMES FOUND", 0, SCREEN_W, 216,
+                         browser_secondary());
+        return;
+    }
+
+    for (int row = 0; row < BROWSER_ROWS && theme_pick_offset + row < theme_list_count; row++) {
         int i   = theme_pick_offset + row;
-        int iy  = CONTENT_Y + row * HOME_ITEM_H;
+        int iy  = 82 + row * 64;
         int sel = (i == theme_pick_sel);
 
         if (sel)
-            draw_select_asset(6, iy + 3, SCREEN_W - 20, HOME_ITEM_H - 6);
+            fill_rect(10, iy + 3, SCREEN_W - 20, 58, browser_accent(4));
         else
-            fill_rect(12, iy + HOME_ITEM_H - 1, SCREEN_W - 24, 1, C_SEP);
+            fill_rect(18, iy + 63, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
 
         char label[64];
         strncpy(label, theme_list_name[i], sizeof(label) - 1);
@@ -4272,31 +5384,48 @@ static void draw_theme_picker(void) {
         if (strncmp(p, "theme_", 6) == 0) p += 6;
         if (*p >= 'a' && *p <= 'z') *p -= 32;
 
-        draw_text(font_large, p, 20, iy + (HOME_ITEM_H - 30) / 2, SC_TEXT);
+        char label_fit[64];
+        truncate_to_fit(font_game, p, label_fit, sizeof(label_fit), 440);
+        draw_text(font_game, label_fit, 20, iy + 16,
+                  sel ? browser_dark_text() : browser_text());
 
-        Uint32 chev_col = sel ? C_SEL_BORDER : C_SEP;
-        draw_chevron(SCREEN_W - 32, iy + HOME_ITEM_H / 2, 8, 2, chev_col);
+        if (sel) {
+            Uint32 border = browser_rgb(0x0E, 0x0F, 0x13);
+            fill_rrect(504, iy + 19, 24, 24, 2, border);
+            fill_rect(506, iy + 21, 20, 20, C_BAR);
+            fill_rrect(536, iy + 19, 24, 24, 2, border);
+            fill_rect(538, iy + 21, 20, 20, C_SEL_BORDER);
+            fill_rrect(568, iy + 19, 24, 24, 2, border);
+            fill_rect(570, iy + 21, 20, 20, C_BG);
+        }
     }
-
-    draw_scrollbar(SCREEN_W - 10, CONTENT_Y + 8, CONTENT_H - 16,
-                   theme_list_count, HOME_VISIBLE, theme_pick_offset);
+    draw_browser_more(0, 414, SCREEN_W, theme_list_count, theme_pick_offset,
+                      BROWSER_ROWS, 4);
 }
 
 static void on_theme_picker_key(SDLKey k) {
     int before = theme_pick_sel;
     if (k == BTN_UP   && theme_pick_sel > 0)                     theme_pick_sel--;
     if (k == BTN_DOWN && theme_pick_sel < theme_list_count - 1)  theme_pick_sel++;
+    if (k == BTN_L2) theme_pick_sel = theme_pick_sel - BROWSER_ROWS < 0
+                                          ? 0 : theme_pick_sel - BROWSER_ROWS;
+    if (k == BTN_R2 && theme_list_count > 0)
+        theme_pick_sel = theme_pick_sel + BROWSER_ROWS >= theme_list_count
+                         ? theme_list_count - 1 : theme_pick_sel + BROWSER_ROWS;
     if (theme_pick_sel != before) {
         play_move();
-        apply_theme_index(theme_pick_sel);
+        preview_theme_index(theme_pick_sel);
     }
     if (k == BTN_A) {
         play_select();
         apply_theme_index(theme_pick_sel);
+        theme_preview_active = 0;
         state = STATE_SETTINGS;
     }
     if (k == BTN_B || k == BTN_MENU) {
         play_back();
+        if (theme_preview_active) restore_theme_palette(&theme_preview_original);
+        theme_preview_active = 0;
         state = STATE_SETTINGS;
     }
 }
@@ -4327,12 +5456,12 @@ static void on_settings_key(SDLKey k) {
         /* scroll so selected row is fully visible */
         int row_y = settings_row_top(settings_sel);
         int row_h = settings_row_h(settings_sel);
-        int max_scroll = total_settings_height() - CONTENT_H;
+        int max_scroll = total_settings_height() - BROWSER_BODY_H;
         if (max_scroll < 0) max_scroll = 0;
         if (row_y < settings_scroll_px)
             settings_scroll_px = row_y;
-        if (row_y + row_h > settings_scroll_px + CONTENT_H)
-            settings_scroll_px = row_y + row_h - CONTENT_H;
+        if (row_y + row_h > settings_scroll_px + BROWSER_BODY_H)
+            settings_scroll_px = row_y + row_h - BROWSER_BODY_H;
         if (settings_scroll_px < 0) settings_scroll_px = 0;
         if (settings_scroll_px > max_scroll) settings_scroll_px = max_scroll;
     }
@@ -4346,7 +5475,10 @@ static void on_settings_key(SDLKey k) {
                 scan_fonts();
                 log_timer_end(_t);
             }
+            font_pick_sel = current_font_index();
             font_pick_prev = font_pick_sel;
+            font_pick_offset = font_pick_sel >= BROWSER_ROWS
+                               ? font_pick_sel - BROWSER_ROWS + 1 : 0;
             state = STATE_FONT_PICKER;
             return;
         }
@@ -4357,18 +5489,26 @@ static void on_settings_key(SDLKey k) {
                 scan_themes();
                 log_timer_end(_t);
             }
+            theme_pick_sel = current_theme_index();
+            if (theme_pick_sel < 0) theme_pick_sel = 0;
+            theme_pick_offset = theme_pick_sel >= BROWSER_ROWS
+                                ? theme_pick_sel - BROWSER_ROWS + 1 : 0;
+            theme_preview_original = capture_theme_palette();
+            theme_preview_active = 1;
             state = STATE_THEME_PICKER;
             return;
         }
         if (kind && strcmp(kind, "system") == 0) {
             play_select();
             info_panel_about = 0;
+            info_panel_back = STATE_SETTINGS;
             state = STATE_INFO_PANEL;
             return;
         }
         if (kind && strcmp(kind, "about") == 0) {
             play_select();
             info_panel_about = 1;
+            info_panel_back = STATE_SETTINGS;
             state = STATE_INFO_PANEL;
             return;
         }
@@ -4383,6 +5523,9 @@ static void on_settings_key(SDLKey k) {
 }
 
 static void on_systems_key(SDLKey k) {
+    if (k == BTN_L1) { cycle_browser_category(-1); return; }
+    if (k == BTN_R1) { cycle_browser_category(1); return; }
+    if (k == BTN_MENU) { open_browser_category(4); return; }
     if (!sys_count) return;
 
     int before = sys_sel;
@@ -4394,12 +5537,12 @@ static void on_systems_key(SDLKey k) {
         sys_sel = (sys_sel + 1) % sys_count;
         load_games(sys_sel);
     }
-    if (k == BTN_L1) {
-        sys_sel = (sys_sel - PANEL_ROWS < 0) ? 0 : sys_sel - PANEL_ROWS;
+    if (k == BTN_L2) {
+        sys_sel = (sys_sel - LIBRARY_SYS_ROWS < 0) ? 0 : sys_sel - LIBRARY_SYS_ROWS;
         load_games(sys_sel);
     }
-    if (k == BTN_R1) {
-        sys_sel = (sys_sel + PANEL_ROWS >= sys_count) ? sys_count - 1 : sys_sel + PANEL_ROWS;
+    if (k == BTN_R2) {
+        sys_sel = (sys_sel + LIBRARY_SYS_ROWS >= sys_count) ? sys_count - 1 : sys_sel + LIBRARY_SYS_ROWS;
         load_games(sys_sel);
     }
     if (sys_sel != before) play_move();
@@ -4407,13 +5550,21 @@ static void on_systems_key(SDLKey k) {
         play_select();
         state = STATE_GAMES;
     }
-    if (k == BTN_B || k == BTN_LEFT || k == BTN_MENU) {
-        play_back();
-        state = STATE_HOME;
+    if (k == BTN_START && game_count > 0) {
+        game_sel = rand() % game_count;
+        launch_game(sys_sel, game_sel);
     }
 }
 
 static void on_games_key(SDLKey k) {
+    if (k == BTN_L1) { cycle_browser_category(-1); return; }
+    if (k == BTN_R1) { cycle_browser_category(1); return; }
+    if (k == BTN_MENU) { open_browser_category(4); return; }
+    if (game_count <= 0) {
+        if (k == BTN_B || k == BTN_LEFT) state = STATE_SYSTEMS;
+        return;
+    }
+
     int before = game_sel;
     if (k == BTN_UP) {
         game_sel = (game_sel - 1 + game_count) % game_count;
@@ -4421,16 +5572,20 @@ static void on_games_key(SDLKey k) {
     if (k == BTN_DOWN) {
         game_sel = (game_sel + 1) % game_count;
     }
-    if (k == BTN_L1) {
-        game_sel = (game_sel - GAME_ROWS < 0) ? 0 : game_sel - GAME_ROWS;
+    if (k == BTN_L2) {
+        game_sel = (game_sel - BROWSER_ROWS < 0) ? 0 : game_sel - BROWSER_ROWS;
     }
-    if (k == BTN_R1) {
-        game_sel = (game_sel + GAME_ROWS >= game_count)
+    if (k == BTN_R2) {
+        game_sel = (game_sel + BROWSER_ROWS >= game_count)
                        ? game_count - 1
-                       : game_sel + GAME_ROWS;
+                       : game_sel + BROWSER_ROWS;
     }
     if (game_sel != before) play_move();
     if (k == BTN_A) {
+        launch_game(sys_sel, game_sel);
+    }
+    if (k == BTN_START) {
+        game_sel = rand() % game_count;
         launch_game(sys_sel, game_sel);
     }
     if (k == BTN_Y && game_count > 0) {
@@ -4450,9 +5605,9 @@ static void on_games_key(SDLKey k) {
         sysbase = sysbase ? sysbase + 1 : sys->rom_dir;
         enter_game_options(g->name, g->path, launch, sysbase, STATE_GAMES);
     }
-    if (k == BTN_B || k == BTN_LEFT || k == BTN_MENU) {
+    if (k == BTN_B || k == BTN_LEFT) {
         play_back();
-        state = STATE_HOME;
+        state = STATE_SYSTEMS;
     }
 }
 
@@ -4484,39 +5639,52 @@ static void scan_fonts(void) {
             if (!probe) continue;
             TTF_CloseFont(probe);
             snprintf(font_list_path[font_list_count], sizeof(font_list_path[0]), "%s", testpath);
-            snprintf(font_list_name[font_list_count], sizeof(font_list_name[0]), "%s", n);
+            copy_truncated(font_list_name[font_list_count],
+                           sizeof(font_list_name[0]), n);
             font_list_count++;
         }
         closedir(dp);
     }
 }
 
-/* Find the index in font_list matching the currently active FONT_PRIMARY. */
+/* Find the picker index that matches the font currently in use. */
 static int current_font_index(void) {
-    for (int i = 0; i < font_list_count; i++)
-        if (strstr(font_list_path[i], "BPreplayBold") ||
-            strstr(font_list_path[i], FONT_PRIMARY + (int)(strrchr(FONT_PRIMARY,'/') - FONT_PRIMARY + 1)))
-            return i;
+    for (int i = 0; i < font_list_count; i++) {
+        if (strcmp(font_list_path[i], active_font_path) == 0) return i;
+    }
+    const char *active_name = strrchr(active_font_path, '/');
+    active_name = active_name ? active_name + 1 : active_font_path;
+    for (int i = 0; i < font_list_count; i++) {
+        if (active_name[0] && strcmp(font_list_name[i], active_name) == 0) return i;
+    }
+    return 0;
+}
+
+static int open_font_set(const char *path, TTF_Font **body, TTF_Font **game,
+                         TTF_Font **large, TTF_Font **small) {
+    *body = TTF_OpenFont(path, 21);
+    *game = TTF_OpenFont(path, 26);
+    *large = TTF_OpenFont(path, 29);
+    *small = TTF_OpenFont(path, 14);
+    if (*body && *game && *large && *small) return 1;
+    if (*body) TTF_CloseFont(*body);
+    if (*game) TTF_CloseFont(*game);
+    if (*large) TTF_CloseFont(*large);
+    if (*small) TTF_CloseFont(*small);
+    *body = *game = *large = *small = NULL;
     return 0;
 }
 
 static void apply_font_index(int idx) {
     if (idx < 0 || idx >= font_list_count) return;
     const char *fp = font_list_path[idx];
-    TTF_Font *nb = TTF_OpenFont(fp, 21);
-    TTF_Font *ng = TTF_OpenFont(fp, 26);
-    TTF_Font *nl = TTF_OpenFont(fp, 29);
-    TTF_Font *ns = TTF_OpenFont(fp, 14);
-    if (!nb || !ng || !nl || !ns) {
-        if (nb) TTF_CloseFont(nb);
-        if (ng) TTF_CloseFont(ng);
-        if (nl) TTF_CloseFont(nl);
-        if (ns) TTF_CloseFont(ns);
-        return;
-    }
+    TTF_Font *nb, *ng, *nl, *ns;
+    if (!open_font_set(fp, &nb, &ng, &nl, &ns)) return;
+    clear_text_cache();
     TTF_CloseFont(font_body);  TTF_CloseFont(font_game);
     TTF_CloseFont(font_large); TTF_CloseFont(font_small);
     font_body = nb; font_game = ng; font_large = nl; font_small = ns;
+    snprintf(active_font_path, sizeof(active_font_path), "%s", fp);
 }
 
 static void save_theme_font(int idx) {
@@ -4527,30 +5695,45 @@ static void save_theme_font(int idx) {
     /* Read existing theme.json if present, otherwise start fresh */
     char buf[4096] = {0};
     FILE *f = fopen(theme_path, "r");
-    if (f) { fread(buf, 1, sizeof(buf) - 1, f); fclose(f); }
-
-    /* Build updated JSON: replace or inject "font" key */
-    char new_buf[4096];
-    const char *fn = font_list_name[idx];
-    char *fp_tag = strstr(buf, "\"font\"");
-    if (fp_tag && buf[0]) {
-        /* Replace existing font value in-place */
-        char before[4096] = {0}, after[4096] = {0};
-        int blen = (int)(fp_tag - buf);
-        strncpy(before, buf, blen);
-        /* Skip past the old value */
-        const char *p = fp_tag + 6;
-        while (*p == ' ' || *p == ':' || *p == '\t') p++;
-        if (*p == '"') { p++; while (*p && *p != '"') p++; if (*p) p++; }
-        strncpy(after, p, sizeof(after) - 1);
-        snprintf(new_buf, sizeof(new_buf), "%s\"font\": \"%s\"%s", before, fn, after);
-    } else {
-        /* No existing theme.json or no font key — write minimal file */
-        snprintf(new_buf, sizeof(new_buf), "{\n  \"font\": \"%s\"\n}\n", fn);
+    if (f) {
+        size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+        int valid = !ferror(f) && (feof(f) || n < sizeof(buf) - 1);
+        fclose(f);
+        if (!valid) {
+            log_kv("theme file too large or unreadable", theme_path);
+            return;
+        }
     }
 
-    f = fopen(theme_path, "w");
-    if (f) { fputs(new_buf, f); fclose(f); }
+    const char *fn = font_list_name[idx];
+    char *fp_tag = strstr(buf, "\"font\"");
+    char tmp[sizeof(theme_path) + 8];
+    f = open_atomic_file(theme_path, tmp, sizeof(tmp));
+    if (!f) {
+        log_errno_msg("font theme write failed", theme_path);
+        return;
+    }
+    if (fp_tag && buf[0]) {
+        fwrite(buf, 1, (size_t)(fp_tag - buf), f);
+        const char *p = fp_tag + 6;
+        while (*p == ' ' || *p == ':' || *p == '\t') p++;
+        if (*p == '"') {
+            p++;
+            while (*p && *p != '"') {
+                if (*p == '\\' && p[1]) p++;
+                p++;
+            }
+            if (*p) p++;
+        }
+        fputs("\"font\": ", f);
+        json_write_string(f, fn);
+        fputs(p, f);
+    } else {
+        fputs("{\n  \"font\": ", f);
+        json_write_string(f, fn);
+        fputs("\n}\n", f);
+    }
+    commit_atomic_file(f, tmp, theme_path);
 }
 
 // ── Theme loader ─────────────────────────────────────────────────────────────
@@ -4569,10 +5752,16 @@ static void hex_to_rgb(const char *hex, Uint8 *r, Uint8 *g, Uint8 *b) {
 static void load_theme(char *font_out, int font_outlen) {
     char path[512];
     snprintf(path, sizeof(path), "%s/theme.json", ASSET_ROOT);
+    load_theme_file(path, font_out, font_outlen);
+}
+
+static void load_theme_file(const char *path, char *font_out, int font_outlen) {
+    if (font_out && font_outlen > 0) font_out[0] = '\0';
     FILE *f = fopen(path, "r");
     if (!f) return;
     char buf[4096] = {0};
-    fread(buf, 1, sizeof(buf) - 1, f);
+    size_t nread = fread(buf, 1, sizeof(buf) - 1, f);
+    buf[nread] = '\0';
     fclose(f);
 
     char val[128];
@@ -4613,9 +5802,16 @@ static void load_theme(char *font_out, int font_outlen) {
         snprintf(p1, sizeof(p1), "%s/miyoo/app/%s", POCKETOS_ROOT, val);
         snprintf(p2, sizeof(p2), "%s/%s", ASSET_ROOT, val);
         FILE *tf = fopen(p1, "r");
-        if (tf) { fclose(tf); strncpy(font_out, p1, font_outlen - 1); return; }
+        if (tf) {
+            fclose(tf);
+            snprintf(font_out, font_outlen, "%s", p1);
+            return;
+        }
         tf = fopen(p2, "r");
-        if (tf) { fclose(tf); strncpy(font_out, p2, font_outlen - 1); }
+        if (tf) {
+            fclose(tf);
+            snprintf(font_out, font_outlen, "%s", p2);
+        }
     }
 }
 
@@ -4623,6 +5819,7 @@ static void load_theme(char *font_out, int font_outlen) {
 
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
+    srand((unsigned int)time(NULL));
     log_open();
     log_msg("pocketOS main start");
     LogTimer _t_startup = log_timer_begin("total startup");
@@ -4692,25 +5889,15 @@ int main(int argc, char *argv[]) {
       load_theme(theme_font, sizeof(theme_font));  // first pass: font only (colors need defaults first)
       log_timer_end(_t); }
 
-    // Load fonts: theme font → BPreplayBold → Exo → CJK fallback
+    // Load one complete font set, falling back as a unit if any size fails.
     { LogTimer _t = log_timer_begin("font load");
-      const char *fp = theme_font[0] ? theme_font : FONT_PRIMARY;
-      font_body  = TTF_OpenFont(fp, 21);
-      font_game  = TTF_OpenFont(fp, 26);
-      font_large = TTF_OpenFont(fp, 29);
-      font_small = TTF_OpenFont(fp, 14);
-      if (!font_body)  font_body  = TTF_OpenFont(FONT_PRIMARY, 21);
-      if (!font_game)  font_game  = TTF_OpenFont(FONT_PRIMARY, 20);
-      if (!font_large) font_large = TTF_OpenFont(FONT_PRIMARY, 26);
-      if (!font_small) font_small = TTF_OpenFont(FONT_PRIMARY, 14);
-      if (!font_body)  font_body  = TTF_OpenFont(FONT_PATH, 21);
-      if (!font_game)  font_game  = TTF_OpenFont(FONT_PATH, 20);
-      if (!font_large) font_large = TTF_OpenFont(FONT_PATH, 26);
-      if (!font_small) font_small = TTF_OpenFont(FONT_PATH, 14);
-      if (!font_body)  font_body  = TTF_OpenFont(FONT_ALT, 21);
-      if (!font_game)  font_game  = TTF_OpenFont(FONT_ALT, 20);
-      if (!font_large) font_large = TTF_OpenFont(FONT_ALT, 26);
-      if (!font_small) font_small = TTF_OpenFont(FONT_ALT, 14);
+      const char *font_candidates[] = {theme_font, FONT_PRIMARY, FONT_PATH, FONT_ALT};
+      for (int i = 0; i < 4 && !font_body; i++) {
+          const char *fp = font_candidates[i];
+          if (!fp[0]) continue;
+          if (open_font_set(fp, &font_body, &font_game, &font_large, &font_small))
+              snprintf(active_font_path, sizeof(active_font_path), "%s", fp);
+      }
       log_timer_end(_t); }
     if (!font_body || !font_game || !font_large || !font_small) {
         log_msg("ERROR: font load failed — no usable font found");
@@ -4737,10 +5924,13 @@ int main(int argc, char *argv[]) {
 
     // Apply theme color overrides (second pass — defaults are now set)
     load_theme(NULL, 0);
+    refresh_browser_palette();
 
     { LogTimer _t = log_timer_begin("load_systems");
       load_systems();
       log_timer_end(_t); }
+    load_favorites();
+    load_most_played();
     if (sys_count > 0) {
         LogTimer _t = log_timer_begin("load_games(0)");
         load_games(0);
@@ -4752,6 +5942,62 @@ int main(int argc, char *argv[]) {
     { LogTimer _t = log_timer_begin("scan_fonts");
       scan_fonts();
       log_timer_end(_t); }
+    { LogTimer _t = log_timer_begin("scan_themes");
+      scan_themes();
+      theme_pick_sel = current_theme_index();
+      if (theme_pick_sel < 0) theme_pick_sel = 0;
+      log_timer_end(_t); }
+
+    /* Host smoke tests can select a view without injecting key events. */
+    const char *start_screen = getenv("POCKETOS_START_SCREEN");
+    if (start_screen && strcmp(start_screen, "browse") == 0) {
+        browser_category = 1; state = STATE_BROWSE_CATS;
+    } else if (start_screen && strcmp(start_screen, "library") == 0) {
+        browser_category = 2; state = STATE_SYSTEMS;
+    } else if (start_screen && strcmp(start_screen, "favorites") == 0) {
+        browser_category = 3; state = STATE_FAVORITES;
+    } else if (start_screen && strcmp(start_screen, "settings") == 0) {
+        browser_category = 4; home_section = 2; state = STATE_HOME;
+    } else if (start_screen && strcmp(start_screen, "apps") == 0) {
+        browser_category = 4; state = STATE_APPS;
+    } else if (start_screen && strcmp(start_screen, "settings-list") == 0) {
+        browser_category = 4; open_settings_kind("brightness");
+    } else if (start_screen && strcmp(start_screen, "font") == 0) {
+        browser_category = 4;
+        font_pick_sel = current_font_index();
+        font_pick_prev = font_pick_sel;
+        state = STATE_FONT_PICKER;
+    } else if (start_screen && strcmp(start_screen, "theme") == 0) {
+        browser_category = 4;
+        scan_themes();
+        theme_pick_sel = current_theme_index();
+        if (theme_pick_sel < 0) theme_pick_sel = 0;
+        theme_preview_original = capture_theme_palette();
+        theme_preview_active = 1;
+        if (theme_list_count > 0) preview_theme_index(theme_pick_sel);
+        state = STATE_THEME_PICKER;
+    } else if (start_screen && strcmp(start_screen, "device") == 0) {
+        browser_category = 4; info_panel_about = 0;
+        info_panel_back = STATE_HOME; state = STATE_INFO_PANEL;
+    } else if (start_screen && strcmp(start_screen, "about") == 0) {
+        browser_category = 4; info_panel_about = 1;
+        info_panel_back = STATE_HOME; state = STATE_INFO_PANEL;
+    } else if (start_screen && strcmp(start_screen, "recent") == 0) {
+        browser_category = 4; load_recent(); state = STATE_RECENT;
+    } else if (start_screen &&
+               (strcmp(start_screen, "options") == 0 ||
+                strcmp(start_screen, "rom-info") == 0 ||
+                strcmp(start_screen, "save-info") == 0) &&
+               sys_count > 0 && game_count > 0) {
+        char launch[512];
+        snprintf(launch, sizeof(launch), "%s/launch.sh", systems[sys_sel].emu_dir);
+        enter_game_options(games[game_sel].name, games[game_sel].path, launch,
+                           systems[sys_sel].label, STATE_GAMES);
+        if (strcmp(start_screen, "rom-info") == 0) game_opts_mode = 1;
+        if (strcmp(start_screen, "save-info") == 0) game_opts_mode = 2;
+    } else {
+        browser_category = 0; state = STATE_MOST_PLAYED;
+    }
 
     log_timer_end(_t_startup);
     log_msg("entering main loop");
@@ -4795,10 +6041,10 @@ int main(int argc, char *argv[]) {
                     on_entry_key(k, recent_entries, recent_count, &recent_sel, &recent_offset, STATE_RECENT);
                     break;
                 case STATE_FAVORITES:
-                    on_entry_key(k, favorite_entries, favorite_count, &favorite_sel, &favorite_offset, STATE_FAVORITES);
+                    on_favorites_key(k);
                     break;
                 case STATE_MOST_PLAYED:
-                    on_entry_key(k, most_played_entries, most_played_count, &most_played_sel, &most_played_offset, STATE_MOST_PLAYED);
+                    on_most_played_key(k);
                     break;
                 case STATE_APPS:         on_apps_key(k);         break;
                 case STATE_SETTINGS:     on_settings_key(k);     break;
@@ -4864,6 +6110,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    clear_text_cache();
     TTF_CloseFont(font_body);
     TTF_CloseFont(font_game);
     TTF_CloseFont(font_large);
@@ -4871,22 +6118,20 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < asset_cache_count; i++) {
         SDL_FreeSurface(asset_cache[i].surface);
     }
-    for (int i = 0; i < text_cache_count; i++) {
-        SDL_FreeSurface(text_cache[i].surface);
-    }
     if (g_dim_overlay) { SDL_FreeSurface(g_dim_overlay); g_dim_overlay = NULL; }
     // Persist settings so they survive reboot (mirrors runtime.sh save_settings)
     {
         char sn[64] = {0};
         FILE *snf = fopen("/tmp/deviceSN", "r");
-        if (snf) { fgets(sn, sizeof(sn), snf); fclose(snf);
+        if (snf) { if (!fgets(sn, sizeof(sn), snf)) sn[0] = '\0'; fclose(snf);
             char *nl = strchr(sn,'\n'); if (nl) *nl='\0'; }
         if (sn[0]) {
-            char cmd[256];
+            char cmd[512];
             snprintf(cmd, sizeof(cmd),
                 "cp -f " POCKETOS_ROOT "/system.json "
                 SYSDIR "/config/system/%s.json", sn);
-            system(cmd);
+            int rc = system(cmd);
+            if (rc != 0) log_int("persist settings rc", rc);
         }
     }
 

@@ -1,0 +1,78 @@
+{
+  "environment_id": "pocketos-release",
+  "version": 1,
+  "project": {
+    "name": "PocketOS",
+    "pocketos_version": "1.2.0",
+    "onion_base": "v4.3.1-1"
+  },
+  "toolchain": {
+    "miyoo_mini": "aemiii91/miyoomini-toolchain@sha256:e5123590ad75d27f0f4c91196e3119a255cad45f3ae15243e29a8e0a2ec50132"
+  },
+  "profiles": {
+    "ci-arm": {
+      "required_tools": ["python3", "docker"],
+      "required_paths": [
+        ".github/workflows/release.yml",
+        "src/pocketOS/Makefile",
+        "src/pocketOS/pocketOS.c",
+        "tests"
+      ],
+      "source_contains": [
+        {
+          "path": ".github/workflows/release.yml",
+          "text": "aemiii91/miyoomini-toolchain@sha256:e5123590ad75d27f0f4c91196e3119a255cad45f3ae15243e29a8e0a2ec50132"
+        },
+        {
+          "path": "src/pocketOS/pocketOS.c",
+          "text": "#define POCKETOS_VERSION \"1.2.0\""
+        },
+        {
+          "path": "src/pocketOS/pocketOS.c",
+          "text": "#define ONION_BASE_VERSION \"v4.3.1-1\""
+        },
+        {
+          "path": "src/pocketOS/Makefile",
+          "text": "-Werror"
+        }
+      ]
+    },
+    "ci-zip": {
+      "required_tools": ["python3", "zip", "unzip"],
+      "required_paths": [
+        "assets/res/pocketos",
+        "tools/install_runtime.py",
+        "tools/onion_runtime.py",
+        "README.md"
+      ],
+      "source_contains": [
+        {
+          "path": ".github/workflows/release.yml",
+          "text": "cp tools/install_runtime.py staging/install-pocketos.py"
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "text": "cp tools/onion_runtime.py staging/onion_runtime.py"
+        }
+      ]
+    },
+    "host-render": {
+      "required_tools": ["python3", "gcc", "sdl-config", "convert"],
+      "required_paths": [
+        "assets/res/pocketos",
+        "src/pocketOS/pocketOS.c",
+        "tools/render_handheld_ui.py"
+      ],
+      "source_contains": [
+        {
+          "path": "tools/render_handheld_ui.py",
+          "text": "SCREENS ="
+        },
+        {
+          "path": "tools/render_handheld_ui.py",
+          "text": "THEME_VARIANTS"
+        }
+      ]
+    }
+  }
+}

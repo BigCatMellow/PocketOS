@@ -1,12 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+project = Path(SPECPATH).parent
+payload = project / 'payload'
+
 a = Analysis(
-    ['installer.py'],
-    pathex=[],
+    [str(project / 'tools' / 'installer.py')],
+    pathex=[str(project / 'tools')],
     binaries=[],
     datas=[
-        ('../release/pocketOS-v1.0/.tmp_update/bin/pocketOS', '.tmp_update/bin'),
-        ('../release/pocketOS-v1.0/.tmp_update/res/pocketos', '.tmp_update/res/pocketos'),
+        (str(payload / '.tmp_update' / 'bin' / 'pocketOS'), 'payload/.tmp_update/bin'),
+        (str(payload / '.tmp_update' / 'res' / 'pocketos'), 'payload/.tmp_update/res/pocketos'),
     ],
     hiddenimports=[],
     hookspath=[],

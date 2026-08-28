@@ -17,20 +17,29 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from pathlib import Path
 
+try:
+    from .onion_runtime import BEGIN_MARKER, END_MARKER, install_runtime_hook, remove_runtime_hook
+except ImportError:  # Direct script and PyInstaller execution.
+    from onion_runtime import BEGIN_MARKER, END_MARKER, install_runtime_hook, remove_runtime_hook
+
 # ── Bundled assets path ───────────────────────────────────────────────────────
 if getattr(sys, "frozen", False):
-    BASE_DIR = Path(sys._MEIPASS)
+    BASE_DIR = Path(sys._MEIPASS) / "payload"
 else:
-    BASE_DIR = Path(__file__).parent.parent / "release" / "pocketOS-v1.0"
+    BASE_DIR = Path(os.environ.get(
+        "POCKETOS_PAYLOAD",
+        Path(__file__).parent.parent / "payload",
+    ))
 
 PAYLOAD_BIN = BASE_DIR / ".tmp_update" / "bin" / "pocketOS"
 PAYLOAD_RES = BASE_DIR / ".tmp_update" / "res" / "pocketos"
+RUNTIME_REL = Path(".tmp_update") / "runtime.sh"
 
 ONION_URL   = "https://github.com/OnionUI/Onion/releases/latest"
 GITHUB_API  = "https://api.github.com/repos/BigCatMellow/PocketOS/releases/latest"
 GITHUB_REPO = "https://github.com/BigCatMellow/PocketOS/releases/latest"
 
-VERSION = "v1.0"
+VERSION = "v1.2.0"
 
 
 # ── ROM import constants ──────────────────────────────────────────────────────
@@ -97,8 +106,39 @@ def detect_sd(path: Path) -> bool:
 
 def detect_onion(path: Path) -> bool:
     return (path / "miyoo" / "app" / "MainUI").exists() or \
+           (path / ".tmp_update" / "onionVersion" / "version.txt").exists() or \
            (path / ".tmp_update" / "onion_version").exists() or \
            (path / "BIOS").is_dir()
+
+def audit_install(sd: Path, payload: Path = BASE_DIR) -> tuple[list[str], list[str]]:
+    errors = []
+    warnings = []
+    if not detect_sd(sd):
+        errors.append("SD root must contain Roms/ and .tmp_update/.")
+    if not detect_onion(sd):
+        warnings.append("Onion OS was not confidently detected; install requires Onion OS.")
+
+    bin_src = payload / ".tmp_update" / "bin" / "pocketOS"
+    res_src = payload / ".tmp_update" / "res" / "pocketos"
+    if not bin_src.is_file():
+        errors.append(f"PocketOS payload binary is missing: {bin_src}")
+    if not res_src.is_dir():
+        errors.append(f"PocketOS payload resources are missing: {res_src}")
+
+    runtime = sd / RUNTIME_REL
+    if not runtime.is_file():
+        errors.append(f"Onion runtime is missing: {runtime}")
+    else:
+        text = runtime.read_text(encoding="utf-8", errors="replace")
+        begin_count = text.count(BEGIN_MARKER)
+        end_count = text.count(END_MARKER)
+        if begin_count != end_count:
+            errors.append("PocketOS runtime markers are incomplete; uninstall or restore runtime.sh first.")
+        elif begin_count > 1:
+            errors.append("PocketOS runtime markers appear more than once; runtime.sh needs manual cleanup.")
+        if "# MainUI launch" not in text and begin_count == 0:
+            errors.append("Onion runtime does not contain the expected MainUI launch section.")
+    return errors, warnings
 
 def fetch_latest_release():
     try:
@@ -120,27 +160,70 @@ def fetch_latest_release():
 def version_tuple(v: str):
     return tuple(int(x) for x in v.lstrip("v").split(".") if x.isdigit())
 
+def _copy_file_atomic(src: Path, dest: Path):
+    tmp = dest.with_name(f".{dest.name}.installing")
+    if tmp.exists():
+        tmp.unlink()
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dest)
+
+def _replace_tree(src: Path, dest: Path, preserve=()):
+    staging = dest.with_name(f".{dest.name}.installing")
+    backup = dest.with_name(f".{dest.name}.previous")
+    for path in (staging, backup):
+        if path.exists():
+            shutil.rmtree(path)
+    shutil.copytree(src, staging)
+    for relative in preserve:
+        existing = dest / relative
+        if existing.is_file():
+            target = staging / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(existing, target)
+    if dest.exists():
+        dest.rename(backup)
+    try:
+        staging.rename(dest)
+    except Exception:
+        if backup.exists() and not dest.exists():
+            backup.rename(dest)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
+
 def install_from_dir(src: Path, sd: Path, log):
+    errors, warnings = audit_install(sd, src)
+    for warning in warnings:
+        log(f"  WARNING: {warning}")
+    if errors:
+        raise RuntimeError("; ".join(errors))
     bin_src  = src / ".tmp_update" / "bin" / "pocketOS"
     res_src  = src / ".tmp_update" / "res" / "pocketos"
     bin_dest = sd  / ".tmp_update" / "bin"
     res_dest = sd  / ".tmp_update" / "res" / "pocketos"
     if not bin_src.exists():
         raise FileNotFoundError(f"Binary not found: {bin_src}")
+    if not res_src.is_dir():
+        raise FileNotFoundError(f"Assets not found: {res_src}")
     log("  Setting up folders on SD card...")
     bin_dest.mkdir(parents=True, exist_ok=True)
-    res_dest.mkdir(parents=True, exist_ok=True)
-    log("  Copying PocketOS launcher...")
-    shutil.copy2(bin_src, bin_dest / "pocketOS")
     log("  Copying themes, icons, and fonts...")
-    if res_dest.exists():
-        shutil.rmtree(res_dest)
-    shutil.copytree(res_src, res_dest)
+    _replace_tree(res_src, res_dest, preserve=(Path("theme.json"),))
+    log("  Copying PocketOS launcher...")
+    _copy_file_atomic(bin_src, bin_dest / "pocketOS")
+    (bin_dest / "pocketOS").chmod(0o755)
+    log("  Installing fail-open Onion launcher hook...")
+    install_runtime_hook(sd)
+    errors, _warnings = audit_install(sd, src)
+    if errors:
+        raise RuntimeError("Post-install audit failed: " + "; ".join(errors))
 
 def install(sd: Path, log):
     install_from_dir(BASE_DIR, sd, log)
 
 def uninstall(sd: Path, log):
+    log("  Restoring the stock Onion launcher...")
+    remove_runtime_hook(sd)
     log("  Removing PocketOS launcher...")
     target = sd / ".tmp_update" / "bin" / "pocketOS"
     if target.exists():
@@ -526,9 +609,14 @@ class Installer:
     # ── Install ──
 
     def _do_install(self):
-        if not PAYLOAD_BIN.exists():
-            _err(f"Payload not found: {PAYLOAD_BIN}")
-            _info("Re-download the installer from the releases page.")
+        errors, warnings = audit_install(self._sd)
+        for warning in warnings:
+            _warn(warning)
+        if errors:
+            _err("Install cannot continue:")
+            for error in errors:
+                _err(f"  {error}")
+            _info("Re-download the current installer from the releases page if the payload is missing.")
             return
 
         print()

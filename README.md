@@ -1,6 +1,8 @@
 # PocketOS
 
-A minimal vertical-list launcher for the [Miyoo Mini Plus](https://lomiyoo.com/), built on top of [Onion OS](https://github.com/OnionUI/Onion). Replaces the default grid menu with a clean list interface — everything else stays the same.
+A focused game launcher for the [Miyoo Mini Plus](https://lomiyoo.com/), built on top of [Onion OS](https://github.com/OnionUI/Onion). The five-category interface keeps Most Played, Browse, Library, Favorites, and Settings one shoulder press apart while retaining Onion's emulators, apps, and runtime.
+
+PocketOS 1.2.0 implements the latest low-overhead design in [the handheld UI notes](docs/handheld-ui-redesign.md): five visible rows, flat high-contrast colors, real library counts, and no thumbnails or GPU-heavy effects.
 
 Requires Onion OS to be installed first. If you haven't set that up yet, grab it [here](https://github.com/OnionUI/Onion/releases/latest). The boot screen flasher is included on your SD card under Apps once Onion is installed.
 
@@ -53,7 +55,7 @@ Requires Onion OS to be installed first. If you haven't set that up yet, grab it
 
 ### PocketOS Setup Suite (recommended)
 
-The installer is a full setup tool — it handles everything in one go:
+The installer is a terminal setup tool that validates your SD card before it copies anything. It handles everything in one go:
 
 1. **Installs PocketOS** onto your SD card
 2. **Imports ROMs** from a folder you choose — unzips them and places each game in the correct system folder automatically
@@ -66,18 +68,18 @@ Download the installer for your platform:
 | Platform | Download |
 |----------|---------|
 | Linux | `PocketOS-Installer-linux.tar.gz` — extract, then run `./PocketOS-Installer-linux` |
-| Windows | `PocketOS-Installer-windows.exe` |
+| Windows | `PocketOS-Installer-windows.zip` — extract, then run `PocketOS-Installer-windows.exe` |
 | macOS | `PocketOS-Installer-macos.tar.gz` — extract, then run `./PocketOS-Installer-macos` |
 
-Point it at your SD card, optionally point it at a folder of ROM ZIPs, and click **Set Up PocketOS**. The installer also checks for newer versions automatically.
+Point it at your SD card and choose **Install PocketOS**. The installer checks for Onion's runtime files, installs a fail-open launcher hook, makes the PocketOS binary executable, can import ROM ZIPs, and checks for newer versions automatically.
 
 ### Manual install
 
-Download `pocketOS-vX.X.zip` and extract it to the **root of your SD card**. The `.tmp_update` folder will merge with the existing one. Eject and boot.
+Download `pocketOS-vX.X.zip` and extract it to the **root of your SD card**. Then open a terminal in the SD card root and run `python3 install-pocketos.py`. This installs a fail-open Onion launcher hook; if PocketOS ever fails, the stock Onion menu is used for the rest of that boot.
 
 ### Uninstall
 
-Delete `.tmp_update/bin/pocketOS` from your SD card and reboot. The default Onion menu comes back.
+Use the installer's **Uninstall PocketOS** option to remove PocketOS and restore the stock Onion launch block. Deleting `.tmp_update/bin/pocketOS` is also safe: the launcher hook will use Onion's default menu when the PocketOS binary is absent.
 
 ---
 
