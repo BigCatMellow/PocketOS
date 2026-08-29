@@ -10,43 +10,29 @@ Requires Onion OS to be installed first. If you haven't set that up yet, grab it
 
 ## Screenshots
 
+**Most Played**
 <p align="center">
-  <img src="screenshots/01 - bootscreen.png" width="480" alt="Boot Screen">
+  <img src="screenshots/1_Most_Played.png" width="480" alt="Most Played">
 </p>
 
+**Browse**
 <p align="center">
-  <img src="screenshots/02 - splash.png" width="480" alt="Splash Screen">
-</p>
-
-**Home Screen**
-<p align="center">
-  <img src="screenshots/03 - Home Screen.png" width="480" alt="Home Screen">
-</p>
-
-**Favorites**
-<p align="center">
-  <img src="screenshots/04 - Favorites.png" width="480" alt="Favorites">
+  <img src="screenshots/2_Browse.png" width="480" alt="Browse">
 </p>
 
 **Library**
 <p align="center">
-  <img src="screenshots/05 - Library.png" width="480" alt="Library">
+  <img src="screenshots/3_Library.png" width="480" alt="Library">
 </p>
 
-**Browse by Genre**
+**Favorites**
 <p align="center">
-  <img src="screenshots/06 - Browse.png" width="480" alt="Browse by Genre">
-</p>
-
-**Apps**
-<p align="center">
-  <img src="screenshots/07 - Apps.png" width="480" alt="Apps">
+  <img src="screenshots/4_Favorties.png" width="480" alt="Favorites">
 </p>
 
 **Settings**
 <p align="center">
-  <img src="screenshots/08 - Settings.png" width="480" alt="Settings">
-  <img src="screenshots/09 - Settings 2.png" width="480" alt="Settings 2">
+  <img src="screenshots/5_Settings.png" width="480" alt="Settings">
 </p>
 
 ---
