@@ -87,10 +87,11 @@ class HandheldUiContractTests(unittest.TestCase):
         theme = (ROOT / "assets" / "res" / "pocketos" / "theme_onion.json").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"bg":            "#F7F6FB"', theme)
-        self.assertIn('"bar":           "#FFFFFF"', theme)
-        self.assertIn('"sel_border":    "#7B4DCC"', theme)
-        self.assertIn('"text":          "#20182E"', theme)
+        self.assertIn('"bg":            "#F8F1E6"', theme)
+        self.assertIn('"bar":           "#FFFDF8"', theme)
+        self.assertIn('"sel":           "#7D3CFF"', theme)
+        self.assertIn('"sel_border":    "#5C1FE0"', theme)
+        self.assertIn('"text":          "#251934"', theme)
 
     def test_light_theme_presets_cover_distinct_surfaces(self):
         theme_dir = ROOT / "assets" / "res" / "pocketos"
@@ -102,9 +103,15 @@ class HandheldUiContractTests(unittest.TestCase):
             data = json.loads(path.read_text(encoding="utf-8"))
             palettes[name] = (data["bg"], data["bar"], data["sel"], data["sel_border"])
         self.assertEqual(len(light_names), len(set(palettes.values())))
-        self.assertEqual("#FFFFFF", json.loads((theme_dir / "theme_onion.json").read_text())["bar"])
-        self.assertEqual("#20242A", json.loads((theme_dir / "theme_ink.json").read_text())["bar"])
-        self.assertEqual("#1D2533", json.loads((theme_dir / "theme_snow.json").read_text())["sel"])
+        for name in light_names:
+            data = json.loads((theme_dir / f"theme_{name}.json").read_text())
+            bg = data["bg"].lstrip("#")
+            r, g, b = (int(bg[i:i + 2], 16) for i in (0, 2, 4))
+            self.assertGreaterEqual((299 * r + 587 * g + 114 * b) // 1000, 235)
+            self.assertTrue(data["sel"].startswith(("#6", "#7", "#8")))
+        self.assertEqual("#7D3CFF", json.loads((theme_dir / "theme_onion.json").read_text())["sel"])
+        self.assertEqual("#7834F8", json.loads((theme_dir / "theme_ink.json").read_text())["sel"])
+        self.assertEqual("#6F2DFF", json.loads((theme_dir / "theme_snow.json").read_text())["sel"])
 
     def test_device_info_uses_onion_runtime_version_sources(self):
         self.assertIn('/.tmp_update/onionVersion/version.txt', self.source)
