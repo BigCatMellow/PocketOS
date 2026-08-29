@@ -1,0 +1,32 @@
+name: Apply MAPS reliability hardening
+
+on:
+  push:
+    branches: [maps-reliability-v1.3]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: maps-reliability-v1.3
+          fetch-depth: 0
+      - name: Apply patches
+        run: python3 tools/_maps_reliability_patch.py
+      - name: Verify
+        run: |
+          python3 -m unittest discover -v
+          bash -n tools/pocketos_stress_test.sh tools/onion_baseline_monitor.sh tools/launcher_comparison_monitor.sh
+      - name: Commit
+        run: |
+          rm -f tools/_maps_reliability_patch.py .github/workflows/maps-reliability-apply.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: harden PocketOS reliability boundaries"
+          git push origin HEAD:maps-reliability-v1.3
