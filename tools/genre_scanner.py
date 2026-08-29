@@ -7,12 +7,9 @@ miyoogamelist.xml files so PocketOS can browse games by genre.
 
 import os
 import sys
-import zlib
-import zipfile
 import sqlite3
 import threading
 import xml.etree.ElementTree as ET
-from xml.dom import minidom
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
@@ -332,10 +329,6 @@ class App(tk.Tk):
                     ET.SubElement(game, "genre").text = genre
                     existing[key] = game
                 else:
-                    name_el = game.find("name")
-                    if name_el is None:
-                        name_el = ET.SubElement(game, "name")
-                    name_el.text = title
                     genre_el = game.find("genre")
                     if genre_el is None:
                         genre_el = ET.SubElement(game, "genre")

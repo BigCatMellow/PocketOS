@@ -5,7 +5,6 @@ import os
 import re
 import sys
 import json
-import zlib
 import shutil
 import sqlite3
 import tempfile
@@ -14,7 +13,6 @@ import urllib.error
 import webbrowser
 import zipfile
 import xml.etree.ElementTree as ET
-from xml.dom import minidom
 from pathlib import Path
 
 try:
@@ -33,9 +31,15 @@ except ImportError:  # Direct script and PyInstaller execution.
     from genre_overrides import load_overrides as load_genre_overrides
 
 try:
-    from .rom_safety import crc32_of, extract_zip_roms
+    from .rom_safety import (
+        GamelistError, crc32_of, extract_zip_roms, index_games,
+        load_gamelist_tree, write_xml_atomic,
+    )
 except ImportError:  # Direct script and PyInstaller execution.
-    from rom_safety import crc32_of, extract_zip_roms
+    from rom_safety import (
+        GamelistError, crc32_of, extract_zip_roms, index_games,
+        load_gamelist_tree, write_xml_atomic,
+    )
 
 # ── Bundled assets path ───────────────────────────────────────────────────────
 if getattr(sys, "frozen", False):
@@ -437,46 +441,6 @@ def _db_lookup(db, rom: Path, system_name: str):
         return row[0], row[1] or "Unsorted"
     return None
 
-def _load_existing(gamelist: Path) -> dict:
-    result = {}
-    if not gamelist.exists():
-        return result
-    try:
-        for el in ET.parse(gamelist).getroot().findall("game"):
-            path = (el.findtext("path") or "").lstrip("./")
-            result[path] = {"path": path,
-                            "name":  el.findtext("name") or path,
-                            "genre": el.findtext("genre") or "Unsorted"}
-    except Exception:
-        pass
-    return result
-
-def _write_gamelist(games: list, dest: Path):
-    root = ET.Element("gameList")
-    for g in sorted(games, key=lambda x: x["name"].lower()):
-        el = ET.SubElement(root, "game")
-        ET.SubElement(el, "path").text  = "./" + g["path"]
-        ET.SubElement(el, "name").text  = g["name"]
-        ET.SubElement(el, "genre").text = g["genre"]
-    pretty = minidom.parseString(ET.tostring(root, encoding="unicode")).toprettyxml(indent="  ", encoding=None)
-    dest.write_text(pretty, encoding="utf-8")
-
-def _write_xml_atomic(tree: ET.ElementTree, dest: Path):
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=".tmp", dir=dest.parent)
-    os.close(fd)
-    tmp = Path(tmp_name)
-    try:
-        with tmp.open("wb") as handle:
-            tree.write(handle, encoding="utf-8", xml_declaration=True)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, dest)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
-
-
 def scan_genres_for_system(roms_root: Path, system_folder: str, db_path: Path, log) -> int:
     system_dir = roms_root / system_folder
     gamelist = system_dir / "miyoogamelist.xml"
@@ -489,27 +453,18 @@ def scan_genres_for_system(roms_root: Path, system_folder: str, db_path: Path, l
         log(f"    DB open failed: {e}")
         return 0
 
-    if gamelist.exists():
-        try:
-            tree = ET.parse(gamelist)
-        except (ET.ParseError, OSError) as e:
-            db.close()
-            log(f"    ERROR: refusing to overwrite malformed gamelist: {e}")
-            return 0
-        root = tree.getroot()
-    else:
-        root = ET.Element("gameList")
-        tree = ET.ElementTree(root)
-
-    existing = {}
-    for el in root.findall("game"):
-        rel = (el.findtext("path") or "").lstrip("./")
-        if rel:
-            existing[rel] = el
+    try:
+        tree = load_gamelist_tree(gamelist)
+    except GamelistError as e:
+        db.close()
+        log(f"    ERROR: {e}")
+        return 0
+    root = tree.getroot()
+    existing = index_games(root)
 
     added = 0
     for rom in sorted(system_dir.iterdir()):
-        if rom.suffix.lower() in {".xml", ".db", ".txt", ""} or not rom.is_file():
+        if not rom.is_file() or rom.suffix.lower() not in ROM_EXTS:
             continue
         if rom.name in existing:
             continue
@@ -523,7 +478,7 @@ def scan_genres_for_system(roms_root: Path, system_folder: str, db_path: Path, l
         added += 1
     db.close()
     if added:
-        _write_xml_atomic(tree, gamelist)
+        write_xml_atomic(tree, gamelist)
     return added
 
 def apply_overrides(roms_root: Path, system_folder: str, overrides: dict, log) -> int:
@@ -531,8 +486,9 @@ def apply_overrides(roms_root: Path, system_folder: str, overrides: dict, log) -
     if not gamelist.exists():
         return 0
     try:
-        tree = ET.parse(gamelist)
-    except Exception:
+        tree = load_gamelist_tree(gamelist)
+    except GamelistError as exc:
+        log(f"    ERROR: {exc}")
         return 0
     root    = tree.getroot()
     changed = 0
@@ -545,7 +501,7 @@ def apply_overrides(roms_root: Path, system_folder: str, overrides: dict, log) -
             genre_el.text = overrides[name]
             changed += 1
     if changed:
-        _write_xml_atomic(tree, gamelist)
+        write_xml_atomic(tree, gamelist)
     return changed
 
 def _asset_dir() -> Path:

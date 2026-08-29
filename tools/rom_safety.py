@@ -69,7 +69,13 @@ def index_games(root: ET.Element) -> dict[str, ET.Element]:
 
 
 def write_xml_atomic(tree: ET.ElementTree, dest: Path) -> None:
+    """Atomically replace a gamelist, retaining the prior version as .bak."""
     dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        backup = dest.with_name(f"{dest.name}.bak")
+        backup_tmp = backup.with_name(f".{backup.name}.tmp")
+        shutil.copy2(dest, backup_tmp)
+        os.replace(backup_tmp, backup)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=".tmp", dir=dest.parent)
     os.close(fd)
     tmp = Path(tmp_name)

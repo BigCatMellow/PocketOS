@@ -113,6 +113,7 @@ class RomToolSafetyTests(unittest.TestCase):
             self.assertIn("Platformer", result)
             self.assertIn("./Imgs/mario.png", result)
             self.assertIn("0.95", result)
+            self.assertTrue(path.with_name("miyoogamelist.xml.bak").is_file())
 
     def test_shared_gamelist_loader_refuses_malformed_xml(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -121,6 +122,34 @@ class RomToolSafetyTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 load_gamelist_tree(path)
 
+    def test_standalone_scanner_only_updates_genre_for_existing_game(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            system = root / "GBA"
+            system.mkdir()
+            (system / "Example.gba").write_bytes(b"rom")
+            gamelist = system / "miyoogamelist.xml"
+            gamelist.write_text(
+                '<gameList><game><path>./Example.gba</path><name>User title</name>'
+                '<image>./Imgs/example.png</image><desc>Keep this</desc>'
+                '<genre>Unsorted</genre></game></gameList>',
+                encoding="utf-8",
+            )
+            db = root / "db.sqlite"
+            db.touch()
+            scanner = genre_scanner.App.__new__(genre_scanner.App)
+            scanner.after = lambda *_args, **_kwargs: None
+            scanner._log_line = lambda _message: None
+            scanner._scan_done = lambda: None
+            with patch("tools.genre_scanner.db_lookup", return_value=("Database title", "Puzzle")):
+                scanner._scan(root, db)
+            result = gamelist.read_text(encoding="utf-8")
+            self.assertIn("User title", result)
+            self.assertNotIn("Database title", result)
+            self.assertIn("./Imgs/example.png", result)
+            self.assertIn("Keep this", result)
+            self.assertIn("Puzzle", result)
+            self.assertTrue(gamelist.with_name("miyoogamelist.xml.bak").is_file())
 
 class RomImporterUiSafetyTests(unittest.TestCase):
     def test_variant_analysis_is_truthfully_non_destructive_and_tk_state_is_captured(self):
@@ -130,4 +159,3 @@ class RomImporterUiSafetyTests(unittest.TestCase):
         self.assertNotIn("self.clean_var.get()", worker)
         self.assertIn("Analyzing possible duplicate/bad/hack variants (no deletion)", source)
         self.assertNotIn("Removing duplicate/bad/hack variants", source)
-

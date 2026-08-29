@@ -1,4 +1,6 @@
 import subprocess
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,6 +17,30 @@ def onion_runtime_rompath(command: str) -> str:
     return result.stdout.rstrip("\n")
 
 
+def compiled_pocketos_command(launch: str, rom: str) -> subprocess.CompletedProcess:
+    """Compile and execute the command writer taken from the production C file."""
+    compiler = shutil.which("cc")
+    if not compiler:
+        raise unittest.SkipTest("a C compiler is required for the launch contract")
+    source = (ROOT / "src" / "pocketOS" / "pocketOS.c").read_text(encoding="utf-8")
+    start = source.index("static int onion_write_quoted_arg")
+    end = source.index("static int json_int_file", start)
+    writer = source[start:end]
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        harness = root / "writer.c"
+        binary = root / "writer"
+        harness.write_text(
+            "#include <stdio.h>\n" + writer + "\n"
+            "int main(int argc, char **argv) {\n"
+            "  return argc == 3 && write_onion_game_command(stdout, argv[1], argv[2]) ? 0 : 2;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        subprocess.run([compiler, "-Wall", "-Werror", "-o", str(binary), str(harness)], check=True)
+        return subprocess.run([str(binary), launch, rom], text=True, capture_output=True, check=False)
+
+
 class LaunchContractTests(unittest.TestCase):
     def test_double_quoted_command_matches_onion_parser(self):
         rom = "/mnt/SDCARD/Roms/GBA/Friday Night Funkin' GBA.gba"
@@ -25,11 +51,36 @@ class LaunchContractTests(unittest.TestCase):
         )
         self.assertEqual(rom, onion_runtime_rompath(command))
 
-    def test_pocketos_writer_uses_onion_double_quote_contract(self):
-        source = (ROOT / "src" / "pocketOS" / "pocketOS.c").read_text()
-        self.assertIn("write_onion_game_command", source)
-        self.assertIn("onion_write_quoted_arg", source)
-        self.assertNotIn("shell_write_quoted", source)
+    def test_production_writer_round_trips_shell_special_filenames(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            pwned = root / "pwned"
+            arg_out = root / "arg.txt"
+            launcher = root / "launch.sh"
+            launcher.write_text('#!/bin/sh\nprintf "%s" "$1" > "$ARG_OUT"\n')
+            launcher.chmod(0o755)
+            rom = (
+                f"{root}/name with spaces 'single' $dollar $(touch {pwned}) "
+                "; semi & amp | pipe (paren) [bracket] üñïçødé.gba"
+            )
+            result = compiled_pocketos_command(str(launcher), rom)
+            self.assertEqual(0, result.returncode, result.stderr)
+            command = result.stdout
+            parsed = onion_runtime_rompath(command)
+            self.assertEqual(rom, parsed)
+            # Onion converts each dollar to a literal dollar before this script runs.
+            script = root / "cmd_to_run.sh"
+            script.write_text(command.replace("$", r"\$") + "\n", encoding="utf-8")
+            env = {"ARG_OUT": str(arg_out)}
+            subprocess.run(["/bin/sh", str(script)], env=env, check=True)
+            self.assertFalse(pwned.exists())
+            self.assertEqual(rom, arg_out.read_text(encoding="utf-8"))
+
+    def test_production_writer_rejects_shell_escaping_boundary_characters(self):
+        for value in ('quote".gba', 'backtick`.gba', 'backslash\\.gba', 'newline\n.gba'):
+            with self.subTest(value=value):
+                result = compiled_pocketos_command("/tmp/launch.sh", value)
+                self.assertEqual(2, result.returncode)
 
     def test_onion_preprocess_neutralizes_dollar_command_substitution(self):
         import os
@@ -73,13 +124,6 @@ class LaunchContractTests(unittest.TestCase):
             subprocess.run(["/bin/sh", str(script)], env=env, check=True)
             self.assertFalse(pwned.exists())
             self.assertEqual(rom, arg_out.read_text())
-
-    def test_pocketos_writer_rejects_backslash_before_shell_handoff(self):
-        source = (ROOT / "src" / "pocketOS" / "pocketOS.c").read_text()
-        start = source.index("static int onion_write_quoted_arg")
-        end = source.index("static int write_onion_game_command", start)
-        writer = source[start:end]
-        self.assertIn("*p == '\\\\'", writer)
 
     def test_backslash_before_dollar_would_bypass_onion_dollar_escape(self):
         # Document why PocketOS rejects backslashes before handing the command to Onion.
