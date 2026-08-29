@@ -48,6 +48,15 @@ replace_once(
     '''        # Variant analysis (optional, deliberately non-destructive)\n        if getattr(self, "_clean_requested", False) and affected_systems:\n            self.log("\\n── Analyzing possible duplicate/bad/hack variants (no deletion) ──")\n            total_flagged = 0\n            for sys_folder in sorted(affected_systems):\n                folder = roms_root / sys_folder\n                flagged = clean_variants(folder, self.log)\n                if flagged:\n                    self.log(f"  {sys_folder}: flagged {flagged} possible variant(s)")\n                    total_flagged += flagged\n            self.log(f"  total flagged: {total_flagged}; no ROM files changed")\n''',
 )
 
+# Launcher boundary: Onion later escapes '$', but a literal backslash before '$'
+# can change shell parsing. Reject backslashes alongside the already-forbidden
+# quote/backtick/newline characters rather than invent a second quoting grammar.
+replace_once(
+    "src/pocketOS/pocketOS.c",
+    r'''        if (*p == '"' || *p == '\n' || *p == '\r' || *p == '`') return 0;''',
+    r'''        if (*p == '"' || *p == '\n' || *p == '\r' || *p == '`' || *p == '\\') return 0;''',
+)
+
 # Functional regression: installer wrapper must use streamed safe extraction and
 # must not pull unrelated ROM extensions into the selected system folder.
 replace_once(
@@ -86,12 +95,11 @@ insert = r'''
 text = text.replace(marker, insert + marker, 1)
 p.write_text(text, encoding="utf-8")
 
-# Source-level guard for the GUI worker boundary and truthful non-destructive text.
+# Source guard for the GUI worker boundary and truthful non-destructive text.
 p = Path("tests/test_rom_tool_safety.py")
 text = p.read_text(encoding="utf-8")
-if marker not in text:
-    raise SystemExit("rom safety test marker missing")
 insert = r'''
+
 
 class RomImporterUiSafetyTests(unittest.TestCase):
     def test_variant_analysis_is_truthfully_non_destructive_and_tk_state_is_captured(self):
@@ -101,6 +109,24 @@ class RomImporterUiSafetyTests(unittest.TestCase):
         self.assertNotIn("self.clean_var.get()", worker)
         self.assertIn("Analyzing possible duplicate/bad/hack variants (no deletion)", source)
         self.assertNotIn("Removing duplicate/bad/hack variants", source)
+'''
+if "class RomImporterUiSafetyTests" in text:
+    raise SystemExit("ROM importer UI test already present")
+p.write_text(text.rstrip() + insert + "\n", encoding="utf-8")
+
+# Source guard for the C launch boundary. The real Onion-dollar behavior is
+# covered separately; this specifically prevents the backslash+dollar bypass.
+p = Path("tests/test_launch_contract.py")
+text = p.read_text(encoding="utf-8")
+if marker not in text:
+    raise SystemExit("launch test marker missing")
+insert = r'''
+    def test_pocketos_writer_rejects_backslash_before_onion_shell_handoff(self):
+        source = (ROOT / "src" / "pocketOS" / "pocketOS.c").read_text()
+        start = source.index("static int onion_write_quoted_arg")
+        end = source.index("static int write_onion_game_command", start)
+        writer = source[start:end]
+        self.assertIn("*p == '\\\\'", writer)
 '''
 text = text.replace(marker, insert + marker, 1)
 p.write_text(text, encoding="utf-8")
