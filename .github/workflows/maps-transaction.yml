@@ -1,0 +1,35 @@
+name: Apply transactional install recovery
+
+on:
+  push:
+    branches: [maps-reliability-v1.3]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: maps-reliability-v1.3
+          fetch-depth: 0
+      - name: Install GUI test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+      - name: Apply transaction hardening
+        run: python3 tools/_maps_transaction_patch.py
+      - name: Verify
+        run: |
+          python3 -m unittest discover -v
+          bash -n tools/pocketos_stress_test.sh tools/onion_baseline_monitor.sh tools/launcher_comparison_monitor.sh
+      - name: Commit verified recovery changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/installer.py tools/onion_runtime.py tests/test_installer.py tests/test_onion_runtime.py docs/roadmap-v1.3-reliability.md
+          git commit -m "fix: make PocketOS install and uninstall transactional"
+          git push origin HEAD:maps-reliability-v1.3
