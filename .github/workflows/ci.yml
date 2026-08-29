@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, maps-reliability-v1.3]
+    branches: [main]
 
 permissions:
   contents: read
