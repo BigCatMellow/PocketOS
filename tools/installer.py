@@ -146,6 +146,91 @@ def _copy_file_atomic(src: Path, dest: Path):
     shutil.copy2(src, tmp)
     os.replace(tmp, dest)
 
+POCKETOS_TRANSACTION_PATHS = (
+    Path(".tmp_update/res/pocketos"),
+    Path(".tmp_update/bin/pocketOS"),
+    Path("pocketos-health-report.py"),
+    Path("pocketos-stress-test.sh"),
+    Path("onion-baseline-monitor.sh"),
+    Path("launcher-comparison-monitor.sh"),
+    Path(".tmp_update/runtime.sh"),
+    Path(".tmp_update/runtime.sh.before-pocketos"),
+)
+
+
+def _remove_snapshot_target(path: Path):
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+class _InstallTransaction:
+    """Rollback guard for the small set of paths PocketOS owns or mutates."""
+
+    def __init__(self, sd: Path):
+        self.sd = sd
+        tmp_root = sd / ".tmp_update"
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        self.root = Path(tempfile.mkdtemp(prefix=".pocketos-transaction-", dir=tmp_root))
+        self.entries = []
+        self.parent_state = {
+            sd / ".tmp_update" / "bin": (sd / ".tmp_update" / "bin").exists(),
+            sd / ".tmp_update" / "res": (sd / ".tmp_update" / "res").exists(),
+        }
+        for index, relative in enumerate(POCKETOS_TRANSACTION_PATHS):
+            target = sd / relative
+            existed = target.exists() or target.is_symlink()
+            backup = self.root / str(index)
+            kind = None
+            link_target = None
+            if existed:
+                if target.is_symlink():
+                    kind = "symlink"
+                    link_target = os.readlink(target)
+                elif target.is_dir():
+                    kind = "dir"
+                    shutil.copytree(target, backup, symlinks=True)
+                else:
+                    kind = "file"
+                    shutil.copy2(target, backup, follow_symlinks=False)
+            self.entries.append((target, existed, kind, backup, link_target))
+
+    def rollback(self):
+        for target, existed, kind, backup, link_target in reversed(self.entries):
+            if target.exists() or target.is_symlink():
+                _remove_snapshot_target(target)
+            if not existed:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if kind == "dir":
+                shutil.copytree(backup, target, symlinks=True)
+            elif kind == "symlink":
+                os.symlink(link_target, target)
+            else:
+                shutil.copy2(backup, target, follow_symlinks=False)
+        for parent, existed in self.parent_state.items():
+            if not existed and parent.is_dir():
+                try:
+                    parent.rmdir()
+                except OSError:
+                    pass
+        self._cleanup()
+
+    def commit(self):
+        self._cleanup()
+
+    def _cleanup(self):
+        if self.root.exists():
+            shutil.rmtree(self.root)
+
+
+def _remove_owned_file(path: Path, log, label: str):
+    if path.exists() or path.is_symlink():
+        path.unlink()
+        log(f"  Removed {label}")
+
+
 def _replace_tree(src: Path, dest: Path, preserve=()):
     staging = dest.with_name(f".{dest.name}.installing")
     backup = dest.with_name(f".{dest.name}.previous")
@@ -176,10 +261,11 @@ def install_from_dir(src: Path, sd: Path, log):
         log(f"  WARNING: {warning}")
     if errors:
         raise RuntimeError("; ".join(errors))
-    bin_src  = src / ".tmp_update" / "bin" / "pocketOS"
-    res_src  = src / ".tmp_update" / "res" / "pocketos"
-    bin_dest = sd  / ".tmp_update" / "bin"
-    res_dest = sd  / ".tmp_update" / "res" / "pocketos"
+
+    bin_src = src / ".tmp_update" / "bin" / "pocketOS"
+    res_src = src / ".tmp_update" / "res" / "pocketos"
+    bin_dest = sd / ".tmp_update" / "bin"
+    res_dest = sd / ".tmp_update" / "res" / "pocketos"
     report_dest = sd / "pocketos-health-report.py"
     stress_dest = sd / "pocketos-stress-test.sh"
     onion_monitor_dest = sd / "onion-baseline-monitor.sh"
@@ -188,48 +274,65 @@ def install_from_dir(src: Path, sd: Path, log):
         raise FileNotFoundError(f"Binary not found: {bin_src}")
     if not res_src.is_dir():
         raise FileNotFoundError(f"Assets not found: {res_src}")
-    log("  Setting up folders on SD card...")
-    bin_dest.mkdir(parents=True, exist_ok=True)
-    log("  Copying themes, icons, and fonts...")
-    _replace_tree(res_src, res_dest, preserve=(Path("theme.json"),))
-    if PAYLOAD_HEALTH_REPORT.is_file():
-        _copy_file_atomic(PAYLOAD_HEALTH_REPORT, report_dest)
-    if PAYLOAD_STRESS_TEST.is_file():
-        _copy_file_atomic(PAYLOAD_STRESS_TEST, stress_dest)
-        stress_dest.chmod(0o755)
-    if PAYLOAD_ONION_MONITOR.is_file():
-        _copy_file_atomic(PAYLOAD_ONION_MONITOR, onion_monitor_dest)
-        onion_monitor_dest.chmod(0o755)
-    if PAYLOAD_COMPARISON_MONITOR.is_file():
-        _copy_file_atomic(PAYLOAD_COMPARISON_MONITOR, comparison_monitor_dest)
-        comparison_monitor_dest.chmod(0o755)
-    log("  Copying PocketOS launcher...")
-    _copy_file_atomic(bin_src, bin_dest / "pocketOS")
-    (bin_dest / "pocketOS").chmod(0o755)
-    log("  Installing fail-open Onion launcher hook...")
-    install_runtime_hook(sd)
-    errors, _warnings = audit_install(sd, src)
-    if errors:
-        raise RuntimeError("Post-install audit failed: " + "; ".join(errors))
+
+    transaction = _InstallTransaction(sd)
+    try:
+        log("  Setting up folders on SD card...")
+        bin_dest.mkdir(parents=True, exist_ok=True)
+        log("  Copying themes, icons, and fonts...")
+        _replace_tree(res_src, res_dest, preserve=(Path("theme.json"),))
+        if PAYLOAD_HEALTH_REPORT.is_file():
+            _copy_file_atomic(PAYLOAD_HEALTH_REPORT, report_dest)
+        if PAYLOAD_STRESS_TEST.is_file():
+            _copy_file_atomic(PAYLOAD_STRESS_TEST, stress_dest)
+            stress_dest.chmod(0o755)
+        if PAYLOAD_ONION_MONITOR.is_file():
+            _copy_file_atomic(PAYLOAD_ONION_MONITOR, onion_monitor_dest)
+            onion_monitor_dest.chmod(0o755)
+        if PAYLOAD_COMPARISON_MONITOR.is_file():
+            _copy_file_atomic(PAYLOAD_COMPARISON_MONITOR, comparison_monitor_dest)
+            comparison_monitor_dest.chmod(0o755)
+        log("  Copying PocketOS launcher...")
+        _copy_file_atomic(bin_src, bin_dest / "pocketOS")
+        (bin_dest / "pocketOS").chmod(0o755)
+        log("  Installing fail-open Onion launcher hook...")
+        install_runtime_hook(sd)
+        errors, _warnings = audit_install(sd, src)
+        if errors:
+            raise RuntimeError("Post-install audit failed: " + "; ".join(errors))
+    except Exception:
+        transaction.rollback()
+        raise
+    else:
+        transaction.commit()
 
 def install(sd: Path, log):
     install_from_dir(BASE_DIR, sd, log)
 
 def uninstall(sd: Path, log):
-    log("  Restoring the stock Onion launcher...")
-    remove_runtime_hook(sd)
-    log("  Removing PocketOS launcher...")
-    target = sd / ".tmp_update" / "bin" / "pocketOS"
-    if target.exists():
-        target.unlink()
-        log("  Removed launcher binary")
+    transaction = _InstallTransaction(sd)
+    try:
+        log("  Restoring the stock Onion launcher...")
+        remove_runtime_hook(sd)
+        log("  Removing PocketOS launcher...")
+        _remove_owned_file(sd / ".tmp_update" / "bin" / "pocketOS", log, "launcher binary")
+        log("  Removing themes and assets...")
+        res = sd / ".tmp_update" / "res" / "pocketos"
+        if res.exists():
+            shutil.rmtree(res)
+            log("  Removed themes, icons, and fonts")
+        for filename, label in (
+            ("pocketos-health-report.py", "health report helper"),
+            ("pocketos-stress-test.sh", "stress-test helper"),
+            ("onion-baseline-monitor.sh", "Onion baseline monitor"),
+            ("launcher-comparison-monitor.sh", "launcher comparison monitor"),
+        ):
+            _remove_owned_file(sd / filename, log, label)
+    except Exception:
+        transaction.rollback()
+        raise
     else:
-        log("  PocketOS binary not found — may already be uninstalled")
-    log("  Removing themes and assets...")
-    res = sd / ".tmp_update" / "res" / "pocketos"
-    if res.exists():
-        shutil.rmtree(res)
-        log("  Removed themes, icons, and fonts")
+        transaction.commit()
 
 
 # ── ROM import helpers ────────────────────────────────────────────────────────

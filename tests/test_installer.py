@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.installer import (
-    _crc32_of, _select_candidate, audit_install, clean_variants, detect_onion,
-    install_from_dir, scan_genres_for_system, uninstall,
+    POCKETOS_TRANSACTION_PATHS, _crc32_of, _select_candidate, audit_install,
+    clean_variants, detect_onion, install_from_dir, scan_genres_for_system, uninstall,
 )
 from tools.install_runtime import install_payload
 from tools.onion_runtime import BEGIN_MARKER
@@ -15,6 +15,30 @@ from tests.test_onion_runtime import STOCK_RUNTIME
 
 
 class InstallerTests(unittest.TestCase):
+    @staticmethod
+    def _owned_state(sd: Path):
+        state = {}
+        for relative in POCKETOS_TRANSACTION_PATHS:
+            target = sd / relative
+            if target.is_symlink():
+                state[str(relative)] = ("symlink", target.readlink().as_posix())
+            elif target.is_file():
+                state[str(relative)] = ("file", target.read_bytes(), target.stat().st_mode & 0o777)
+            elif target.is_dir():
+                files = {}
+                for child in sorted(target.rglob("*")):
+                    rel = child.relative_to(target).as_posix()
+                    if child.is_symlink():
+                        files[rel] = ("symlink", child.readlink().as_posix())
+                    elif child.is_file():
+                        files[rel] = ("file", child.read_bytes(), child.stat().st_mode & 0o777)
+                    elif child.is_dir():
+                        files[rel] = ("dir",)
+                state[str(relative)] = ("dir", files)
+            else:
+                state[str(relative)] = None
+        return state
+
     @staticmethod
     def _make_payload_and_sd(root: Path):
         payload = root / "payload"
@@ -173,6 +197,89 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(Path("/card-two"), selected)
         self.assertEqual(3, len(warnings))
         self.assertTrue(all("1 to 2" in warning for warning in warnings))
+
+    def test_failed_update_rolls_back_all_owned_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            payload, sd, runtime = self._make_payload_and_sd(root)
+            install_from_dir(payload, sd, lambda _message: None)
+
+            binary = sd / ".tmp_update" / "bin" / "pocketOS"
+            binary.write_bytes(b"old installed binary")
+            assets = sd / ".tmp_update" / "res" / "pocketos"
+            (assets / "old-only.txt").write_text("keep me")
+            helper = sd / "pocketos-health-report.py"
+            helper.write_text("old report")
+            before = self._owned_state(sd)
+
+            (payload / ".tmp_update" / "bin" / "pocketOS").write_bytes(b"new binary")
+            (payload / ".tmp_update" / "res" / "pocketos" / "new.txt").write_text("new")
+
+            from tools import installer as installer_module
+            real_hook = installer_module.install_runtime_hook
+
+            def fail_after_runtime_change(card):
+                real_hook(card)
+                raise RuntimeError("injected failure after runtime patch")
+
+            with patch("tools.installer.install_runtime_hook", side_effect=fail_after_runtime_change):
+                with self.assertRaisesRegex(RuntimeError, "injected failure"):
+                    install_from_dir(payload, sd, lambda _message: None)
+
+            self.assertEqual(before, self._owned_state(sd))
+            self.assertFalse(any((sd / ".tmp_update").glob(".pocketos-transaction-*")))
+
+    def test_failed_fresh_install_leaves_no_pocketos_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            payload, sd, _runtime = self._make_payload_and_sd(root)
+            before = self._owned_state(sd)
+            with patch("tools.installer.install_runtime_hook", side_effect=RuntimeError("hook failed")):
+                with self.assertRaisesRegex(RuntimeError, "hook failed"):
+                    install_from_dir(payload, sd, lambda _message: None)
+            self.assertEqual(before, self._owned_state(sd))
+            self.assertFalse(any((sd / ".tmp_update").glob(".pocketos-transaction-*")))
+
+    def test_failed_uninstall_restores_runtime_and_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            payload, sd, _runtime = self._make_payload_and_sd(root)
+            install_from_dir(payload, sd, lambda _message: None)
+            (sd / "pocketos-health-report.py").write_text("report")
+            before = self._owned_state(sd)
+
+            from tools import installer as installer_module
+            real_remove = installer_module._remove_owned_file
+            calls = {"count": 0}
+
+            def fail_after_first_remove(path, log, label):
+                real_remove(path, log, label)
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise RuntimeError("injected uninstall failure")
+
+            with patch("tools.installer._remove_owned_file", side_effect=fail_after_first_remove):
+                with self.assertRaisesRegex(RuntimeError, "injected uninstall failure"):
+                    uninstall(sd, lambda _message: None)
+
+            self.assertEqual(before, self._owned_state(sd))
+            self.assertFalse(any((sd / ".tmp_update").glob(".pocketos-transaction-*")))
+
+    def test_successful_uninstall_removes_root_helpers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            payload, sd, _runtime = self._make_payload_and_sd(Path(temp))
+            install_from_dir(payload, sd, lambda _message: None)
+            for name in (
+                "pocketos-health-report.py", "pocketos-stress-test.sh",
+                "onion-baseline-monitor.sh", "launcher-comparison-monitor.sh",
+            ):
+                (sd / name).write_text("helper")
+            uninstall(sd, lambda _message: None)
+            for name in (
+                "pocketos-health-report.py", "pocketos-stress-test.sh",
+                "onion-baseline-monitor.sh", "launcher-comparison-monitor.sh",
+            ):
+                self.assertFalse((sd / name).exists(), name)
 
 
 if __name__ == "__main__":

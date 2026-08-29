@@ -23,3 +23,5 @@ Final proof: PR CI + ARM build + adversarial data-integrity tests + independent 
 - [ ] Split launcher modules only after behavior is locked by tests.
 
 - [x] Harden standalone importer/scanner metadata writes.
+
+- [x] Refresh Onion runtime backup when a newer stock runtime is patched.
