@@ -728,7 +728,7 @@ static int json_write_string(FILE *f, const char *value) {
 static int onion_write_quoted_arg(FILE *f, const char *value) {
     if (fputc('"', f) == EOF) return 0;
     for (const char *p = value; *p; p++) {
-        if (*p == '"' || *p == '\n' || *p == '\r' || *p == '`') return 0;
+        if (*p == '"' || *p == '\n' || *p == '\r' || *p == '`' || *p == '\\') return 0;
         if (fputc(*p, f) == EOF) return 0;
     }
     return fputc('"', f) != EOF;

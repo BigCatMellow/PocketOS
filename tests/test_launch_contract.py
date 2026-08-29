@@ -74,6 +74,38 @@ class LaunchContractTests(unittest.TestCase):
             self.assertFalse(pwned.exists())
             self.assertEqual(rom, arg_out.read_text())
 
+    def test_pocketos_writer_rejects_backslash_before_shell_handoff(self):
+        source = (ROOT / "src" / "pocketOS" / "pocketOS.c").read_text()
+        start = source.index("static int onion_write_quoted_arg")
+        end = source.index("static int write_onion_game_command", start)
+        writer = source[start:end]
+        self.assertIn("*p == '\\\\'", writer)
+
+    def test_backslash_before_dollar_would_bypass_onion_dollar_escape(self):
+        # Document why PocketOS rejects backslashes before handing the command to Onion.
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            pwned = root / "pwned"
+            arg_out = root / "arg.txt"
+            launcher = root / "launch.sh"
+            launcher.write_text('#!/bin/sh\nprintf "%s" "$1" > "$ARG_OUT"\n')
+            launcher.chmod(0o755)
+            rom = f"{root}/Game \\$(touch {pwned}).gba"
+            command = f'"{launcher}" "{rom}"'
+            parsed = onion_runtime_rompath(command)
+            if "$" in parsed:
+                command = command.replace("$", r"\$")
+            env = os.environ.copy()
+            env["ARG_OUT"] = str(arg_out)
+            script = root / "cmd_to_run.sh"
+            script.write_text(command + "\n")
+            subprocess.run(["/bin/sh", str(script)], env=env, check=True)
+            # This demonstrates the dangerous shell behavior; the C writer must
+            # reject the filename before a command like this can be emitted.
+            self.assertTrue(pwned.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
