@@ -22,11 +22,10 @@ jobs:
         run: |
           python3 -m unittest discover -v
           bash -n tools/pocketos_stress_test.sh tools/onion_baseline_monitor.sh tools/launcher_comparison_monitor.sh
-      - name: Commit
+      - name: Commit verified product changes
         run: |
-          rm -f tools/_maps_reliability_patch.py .github/workflows/maps-reliability-apply.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add src/pocketOS/pocketOS.c tools/installer.py tools/pocketos_health_report.py tests/test_installer.py tests/test_handheld_ui.py tests/test_launch_contract.py tests/test_health_report.py docs/roadmap-v1.3-reliability.md
           git commit -m "fix: harden PocketOS reliability boundaries"
           git push origin HEAD:maps-reliability-v1.3
