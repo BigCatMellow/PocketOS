@@ -10,6 +10,17 @@ Requires Onion OS to be installed first. If you haven't set that up yet, grab it
 
 ## Screenshots
 
+**Boot Screen**
+<p align="center">
+  <img src="screenshots/bootscreen.png" width="480" alt="PocketOS boot screen">
+</p>
+
+**Splash Screens**
+<p align="center">
+  <img src="screenshots/splashscreen.png" width="480" alt="PocketOS splash screen">
+  <img src="screenshots/splashscreen2.png" width="480" alt="PocketOS alternate splash screen">
+</p>
+
 **Most Played**
 <p align="center">
   <img src="screenshots/1_Most_Played.png" width="480" alt="Most Played">
@@ -40,6 +51,12 @@ Requires Onion OS to be installed first. If you haven't set that up yet, grab it
 ## Fonts
 
 Use **Settings → Appearance → Font** to choose a typeface. PocketOS includes compact, high-legibility options for the Miyoo Mini Plus display: DejaVu Sans, Lato, Noto Sans, Roboto Condensed, and Kenney Future Narrow.
+
+---
+
+## Themes
+
+PocketOS includes 53 built-in color schemes. In **Settings → Appearance → Theme**, choose from the original light palettes and purpose-built dark variants including Ayu, Catppuccin Mocha, Dracula, Everforest, Gruvbox, Kanagawa, Monokai, Nord, One Dark, Rosé Pine, Solarized, and Tokyo Night. Changes preview live before you confirm them.
 
 ---
 

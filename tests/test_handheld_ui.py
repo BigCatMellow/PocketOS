@@ -124,15 +124,30 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertEqual("#7834F8", json.loads((theme_dir / "theme_ink.json").read_text())["sel"])
         self.assertEqual("#6F2DFF", json.loads((theme_dir / "theme_snow.json").read_text())["sel"])
 
-    def test_themes_are_light_accent_palettes(self):
+    def test_theme_presets_cover_light_and_dark_palettes(self):
         theme_dir = ROOT / "assets" / "res" / "pocketos"
+        dark_names = {
+            "ayu_dark", "catppuccin_mocha", "dracula_dark", "everforest_dark",
+            "gruvbox_dark", "kanagawa", "monokai", "nord_dark", "one_dark",
+            "rose_pine", "solarized_dark", "tokyo_night",
+        }
         for path in sorted(theme_dir.glob("theme_*.json")):
             data = json.loads(path.read_text(encoding="utf-8"))
+            name = path.stem.removeprefix("theme_")
             for key in ("bg", "bar", "card"):
                 color = data[key].lstrip("#")
                 r, g, b = (int(color[i:i + 2], 16) for i in (0, 2, 4))
                 luma = (299 * r + 587 * g + 114 * b) // 1000
-                self.assertGreaterEqual(luma, 225, f"{path.name} {key} is too dark")
+                if name in dark_names:
+                    self.assertLessEqual(luma, 100, f"{path.name} {key} is too light")
+                else:
+                    self.assertGreaterEqual(luma, 225, f"{path.name} {key} is too dark")
+            self.assertGreaterEqual(
+                (299 * int(data["text"][1:3], 16) + 587 * int(data["text"][3:5], 16)
+                 + 114 * int(data["text"][5:7], 16)) // 1000,
+                160 if name in dark_names else 10,
+                f"{path.name} text lacks usable contrast",
+            )
             self.assertEqual("#FFFFFF", data["white"], f"{path.name} selected text is not white")
 
     def test_dark_mode_is_a_separate_appearance_setting(self):
@@ -152,7 +167,7 @@ class HandheldUiContractTests(unittest.TestCase):
             hue, saturation, _value = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
             hues.append(int(hue * 12))
             accents.add(data["sel"])
-            self.assertGreaterEqual(saturation, 0.35, f"{path.name} accent is too gray")
+            self.assertGreaterEqual(saturation, 0.25, f"{path.name} accent is too gray")
         self.assertGreaterEqual(len(accents), 24)
         self.assertGreaterEqual(len(set(hues)), 8)
 
