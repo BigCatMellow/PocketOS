@@ -1,0 +1,90 @@
+name: Reconcile reliability branch with main
+
+on:
+  push:
+    branches: [maps-reliability-v1.3]
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: maps-reliability-v1.3
+          fetch-depth: 0
+      - name: Merge current main and preserve stricter reliability implementations
+        run: |
+          set +e
+          git fetch origin main
+          git merge --no-commit --no-ff origin/main
+          merge_status=$?
+          set -e
+
+          # These files overlap because main independently fixed the proc parser
+          # and bumped the release. Keep the reliability branch's stricter
+          # implementations, then apply the 1.2.6 version metadata below.
+          git checkout HEAD -- src/pocketOS/pocketOS.c tests/test_handheld_ui.py tools/installer.py
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              "src/pocketOS/pocketOS.c": [
+                  ('#define POCKETOS_VERSION "1.2.5"', '#define POCKETOS_VERSION "1.2.6"'),
+              ],
+              "tests/test_handheld_ui.py": [
+                  ('def test_release_version_is_1_2_5(self):', 'def test_release_version_is_1_2_6(self):'),
+                  ('#define POCKETOS_VERSION "1.2.5"', '#define POCKETOS_VERSION "1.2.6"'),
+              ],
+              "tools/installer.py": [
+                  ('VERSION = "v1.2.5"', 'VERSION = "v1.2.6"'),
+              ],
+          }
+          for filename, changes in replacements.items():
+              path = Path(filename)
+              text = path.read_text(encoding="utf-8")
+              for old, new in changes:
+                  if old not in text:
+                      raise SystemExit(f"expected version text missing in {filename}: {old}")
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+          PY
+
+          git add README.md docs/handheld-ui-redesign.md pocketos/environment.json \
+                  tests/test_environment_contract.py src/pocketOS/pocketOS.c \
+                  tests/test_handheld_ui.py tools/installer.py
+
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            echo "Unresolved merge conflicts remain:"
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+
+          # A nonzero merge status is expected when the known overlapping files
+          # conflict. Anything unresolved has already failed above.
+          echo "merge status: $merge_status"
+      - name: Install GUI test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+      - name: Verify reconciled tree
+        run: |
+          python3 -m unittest discover -v
+          bash -n tools/pocketos_stress_test.sh tools/onion_baseline_monitor.sh tools/launcher_comparison_monitor.sh
+          docker run --rm \
+            -v "$PWD:/root/workspace" \
+            aemiii91/miyoomini-toolchain@sha256:e5123590ad75d27f0f4c91196e3119a255cad45f3ae15243e29a8e0a2ec50132 \
+            bash -l -c "source /root/.bashrc; make -C /root/workspace/src/pocketOS clean all"
+      - name: Remove one-shot workflow
+        run: git rm .github/workflows/reconcile-main.yml
+      - name: Commit merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "merge: reconcile reliability hardening with v1.2.6"
+          git push origin HEAD:maps-reliability-v1.3
