@@ -549,6 +549,19 @@ def _log(text):
         _info(t)
 
 
+def _select_candidate(candidates, input_fn=input, warn_fn=_warn):
+    """Require an explicit valid choice; never infer a destructive target."""
+    while True:
+        raw = input_fn(f"\n  Select [1-{len(candidates)}]: ").strip()
+        try:
+            number = int(raw)
+        except ValueError:
+            number = 0
+        if 1 <= number <= len(candidates):
+            return candidates[number - 1]
+        warn_fn(f"Enter a number from 1 to {len(candidates)}")
+
+
 class Installer:
 
     def __init__(self):
@@ -614,11 +627,7 @@ class Installer:
             print()
             for i, p in enumerate(candidates):
                 print(f"    [{i+1}] {p}")
-            choice = input(f"\n  Select [1-{len(candidates)}]: ").strip()
-            try:
-                self._sd = candidates[int(choice) - 1]
-            except (ValueError, IndexError):
-                self._sd = candidates[0]
+            self._sd = _select_candidate(candidates)
             _ok(f"Selected: {_BOLD}{self._sd}{_R}")
         else:
             _warn("No SD card detected automatically.")

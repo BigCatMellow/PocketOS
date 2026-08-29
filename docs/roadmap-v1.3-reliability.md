@@ -13,7 +13,7 @@ Final proof: PR CI + ARM build + adversarial data-integrity tests + independent 
 - [x] Preserve gamelist XML metadata and refuse malformed overwrite.
 - [x] Compute CRC32 across the complete ROM.
 - [x] Add PR/main CI and adversarial regressions.
-- [ ] Stop invalid SD selection from silently choosing a drive.
+- [x] Stop invalid SD selection from silently choosing a drive.
 - [ ] Consolidate canonical Onion system/folder mappings.
 - [ ] Redesign ambiguous/CD/arcade ZIP importing.
 - [ ] Replace executable Python overrides with data-only overrides.

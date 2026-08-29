@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.installer import (
-    _crc32_of, audit_install, clean_variants, detect_onion,
+    _crc32_of, _select_candidate, audit_install, clean_variants, detect_onion,
     install_from_dir, scan_genres_for_system, uninstall,
 )
 from tools.install_runtime import install_payload
@@ -164,6 +164,15 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(0, scan_genres_for_system(root, "GBA", db, logs.append))
             self.assertEqual(original, gamelist.read_bytes())
             self.assertTrue(any("refusing to overwrite" in line for line in logs))
+
+    def test_sd_candidate_selection_reprompts_until_valid(self):
+        choices = iter(["nonsense", "0", "3", "2"])
+        warnings = []
+        candidates = [Path("/card-one"), Path("/card-two")]
+        selected = _select_candidate(candidates, lambda _prompt: next(choices), warnings.append)
+        self.assertEqual(Path("/card-two"), selected)
+        self.assertEqual(3, len(warnings))
+        self.assertTrue(all("1 to 2" in warning for warning in warnings))
 
 
 if __name__ == "__main__":
