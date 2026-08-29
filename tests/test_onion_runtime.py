@@ -48,6 +48,8 @@ class RuntimeTextTests(unittest.TestCase):
         self.assertIn("pocketos_stress_test_seconds", patched)
         self.assertIn("POCKETOS_STRESS_TEST=1", patched)
         self.assertIn('POCKETOS_STRESS_TEST_SECONDS="$pocketos_stress_seconds"', patched)
+        self.assertIn(": > /tmp/stay_awake", patched)
+        self.assertIn("rm -f /tmp/stay_awake", patched)
 
     def test_unpatch_removes_only_managed_hook(self):
         restored = unpatch_runtime_text(patch_runtime_text(STOCK_RUNTIME))

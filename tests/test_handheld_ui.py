@@ -35,8 +35,8 @@ class HandheldUiContractTests(unittest.TestCase):
         ]
         self.assertNotIn("SDL_SetAlpha", primary_shell)
 
-    def test_release_version_is_1_2_7(self):
-        self.assertIn('#define POCKETOS_VERSION "1.2.7"', self.source)
+    def test_release_version_is_1_2_8(self):
+        self.assertIn('#define POCKETOS_VERSION "1.2.8"', self.source)
 
     def test_library_system_rows_do_not_repeat_names_in_badges(self):
         library = self.source[
