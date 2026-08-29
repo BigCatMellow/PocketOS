@@ -26,12 +26,17 @@ MANAGED_BLOCK = """\
     fi
     if [ -x "$sysdir/bin/pocketOS" ] && [ ! -e "$pocketos_fail_flag" ]; then
         if echo "$pocketos_stress_seconds" | grep -q '^[1-9][0-9]*$'; then
+            # Onion's key monitor uses real button activity for its own sleep
+            # timer.  The automated test has no physical presses, so keep the
+            # device awake only for this explicitly requested run.
+            : > /tmp/stay_awake
             PATH="$miyoodir/app:$PATH" \\
                 LD_LIBRARY_PATH="$miyoodir/lib:/config/lib:/lib" \\
                 LD_PRELOAD="$miyoodir/lib/libpadsp.so" \\
                 POCKETOS_STRESS_TEST=1 \\
                 POCKETOS_STRESS_TEST_SECONDS="$pocketos_stress_seconds" \\
                 "$sysdir/bin/pocketOS"
+            rm -f /tmp/stay_awake
         else
             PATH="$miyoodir/app:$PATH" \\
                 LD_LIBRARY_PATH="$miyoodir/lib:/config/lib:/lib" \\
