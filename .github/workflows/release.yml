@@ -92,6 +92,7 @@ jobs:
           cp tools/onion_runtime.py staging/onion_runtime.py
           cp tools/pocketos_health_report.py staging/pocketos-health-report.py
           cp tools/pocketos_stress_test.sh staging/pocketos-stress-test.sh
+          cp tools/onion_baseline_monitor.sh staging/onion-baseline-monitor.sh
           cp README.md staging/README.md
           (cd staging && find . -type f ! -name manifest.sha256 -print0 \
             | LC_ALL=C sort -z \
@@ -175,6 +176,7 @@ jobs:
           cp -r assets/res/pocketos payload/.tmp_update/res/pocketos
           cp tools/pocketos_health_report.py payload/pocketos-health-report.py
           cp tools/pocketos_stress_test.sh payload/pocketos-stress-test.sh
+          cp tools/onion_baseline_monitor.sh payload/onion-baseline-monitor.sh
 
       - name: Prepare payload (Windows)
         if: matrix.label == 'windows'
@@ -186,6 +188,7 @@ jobs:
           Copy-Item -Recurse "assets/res/pocketos" "payload/.tmp_update/res/pocketos"
           Copy-Item "tools/pocketos_health_report.py" "payload/pocketos-health-report.py"
           Copy-Item "tools/pocketos_stress_test.sh" "payload/pocketos-stress-test.sh"
+          Copy-Item "tools/onion_baseline_monitor.sh" "payload/onion-baseline-monitor.sh"
 
       - name: Build installer
         run: >

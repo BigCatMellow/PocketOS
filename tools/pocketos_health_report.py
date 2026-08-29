@@ -24,8 +24,10 @@ def span(values: list[int], unit: str) -> str:
 
 
 def main() -> int:
-    sd_root = Path(sys.argv[1]) if len(sys.argv) == 2 else Path.cwd()
-    path = sd_root / ".tmp_update" / "logs" / "pocketos_health.csv"
+    onion_mode = len(sys.argv) == 3 and sys.argv[1] == "--onion"
+    sd_root = Path(sys.argv[2] if onion_mode else sys.argv[1]) if len(sys.argv) in (2, 3) else Path.cwd()
+    filename = "onion_baseline_health.csv" if onion_mode else "pocketos_health.csv"
+    path = sd_root / ".tmp_update" / "logs" / filename
     if not path.is_file():
         print("No health log found.")
         print(f"Expected: {path}")
@@ -39,14 +41,15 @@ def main() -> int:
 
     timestamps = [number(row, "timestamp") for row in rows]
     timestamps = [value for value in timestamps if value is not None]
-    rss = [number(row, "rss_kb") for row in rows]
+    rss_key = "launcher_rss_kb" if onion_mode else "rss_kb"
+    rss = [number(row, rss_key) for row in rows]
     memory = [number(row, "mem_available_kb") for row in rows]
     battery = [number(row, "battery_percent") for row in rows]
     rss = [value for value in rss if value is not None]
     memory = [value for value in memory if value is not None]
     battery = [value for value in battery if value is not None]
 
-    print("PocketOS health report")
+    print("Onion baseline report" if onion_mode else "PocketOS health report")
     print("=" * 22)
     print(f"Samples: {len(rows)}")
     if timestamps:

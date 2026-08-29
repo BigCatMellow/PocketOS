@@ -2,7 +2,7 @@
 
 A focused game launcher for the [Miyoo Mini Plus](https://lomiyoo.com/), built on top of [Onion OS](https://github.com/OnionUI/Onion). The five-category interface keeps Most Played, Browse, Library, Favorites, and Settings one shoulder press apart while retaining Onion's emulators, apps, and runtime.
 
-PocketOS 1.2.3 implements the latest low-overhead design in [the handheld UI notes](docs/handheld-ui-redesign.md): five visible rows, flat high-contrast colors, real library counts, and no thumbnails or GPU-heavy effects.
+PocketOS 1.2.4 implements the latest low-overhead design in [the handheld UI notes](docs/handheld-ui-redesign.md): five visible rows, flat high-contrast colors, real library counts, and no thumbnails or GPU-heavy effects.
 
 Requires Onion OS to be installed first. If you haven't set that up yet, grab it [here](https://github.com/OnionUI/Onion/releases/latest). The boot screen flasher is included on your SD card under Apps once Onion is installed.
 
@@ -62,7 +62,7 @@ PocketOS includes 53 built-in color schemes. In **Settings → Appearance → Th
 
 ## Health monitoring (optional)
 
-PocketOS can write a small local health log—memory use, available memory, battery level, brightness, and screen state—to help diagnose long-session issues. It records no game names and sends nothing online. Create an empty file named `.tmp_update/logs/pocketos_health.csv` on the SD card to enable it. After using PocketOS, run `python3 pocketos-health-report.py /path/to/your/SD-card` on your computer. For an unattended active test, run `sh /mnt/SDCARD/pocketos-stress-test.sh 30` from Onion Terminal; it runs for 30 minutes, cycles PocketOS views, and stops automatically. Delete the CSV to stop monitoring.
+PocketOS can write a small local health log—memory use, available memory, battery level, brightness, and screen state—to help diagnose long-session issues. It records no game names and sends nothing online. Create an empty file named `.tmp_update/logs/pocketos_health.csv` on the SD card to enable it. After using PocketOS, run `python3 pocketos-health-report.py /path/to/your/SD-card` on your computer. For an unattended active test, run `sh /mnt/SDCARD/pocketos-stress-test.sh 30` from Onion Terminal; it runs for 30 minutes, cycles PocketOS views, and stops automatically. For a stock Onion baseline, run `sh /mnt/SDCARD/onion-baseline-monitor.sh start 30`, exit Terminal to MainUI, then report with `python3 pocketos-health-report.py --onion /path/to/your/SD-card`. Delete either CSV to stop its corresponding monitor.
 
 ---
 
