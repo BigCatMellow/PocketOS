@@ -1,0 +1,31 @@
+name: Shell boundary correction
+
+on:
+  push:
+    branches: [maps-reliability-v1.3]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: maps-reliability-v1.3
+          fetch-depth: 0
+      - name: Apply correction
+        run: python3 tools/_shell_boundary_patch.py
+      - name: Verify launch contract
+        run: python3 -m unittest -v tests.test_launch_contract
+      - name: Remove one-shot scaffolding
+        run: git rm tools/_shell_boundary_patch.py .github/workflows/shell-boundary-fix.yml
+      - name: Commit verified correction
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/pocketOS/pocketOS.c tests/test_launch_contract.py
+          git commit -m "fix: reject unsafe backslashes in Onion shell handoff"
+          git push origin HEAD:maps-reliability-v1.3
