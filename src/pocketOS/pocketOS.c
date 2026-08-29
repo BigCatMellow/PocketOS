@@ -141,7 +141,7 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #ifndef FONT_PRIMARY
 #define FONT_PRIMARY POCKETOS_ROOT "/miyoo/app/BPreplayBold.otf"
 #endif
-#define POCKETOS_VERSION "1.2.2"
+#define POCKETOS_VERSION "1.2.3"
 #define ONION_BASE_VERSION "v4.3.1-1"
 
 // ── Button mappings (from Onion keymap_sw.h) ─────────────────────────────────
@@ -1381,6 +1381,47 @@ static void health_log_sample(const char *event) {
             proc_kb_value("/proc/meminfo", "MemAvailable:"), read_battery(),
             json_int_file(POCKETOS_ROOT "/system.json", "brightness", -1));
     fclose(f);
+}
+
+/* Exercise rendering, list selection, font replacement, and theme preview
+ * without launching a game or writing user appearance settings.  This runs
+ * only when POCKETOS_STRESS_TEST is explicitly set by the Terminal runner. */
+static void run_stress_step(int step) {
+    switch (step % 6) {
+        case 0:
+            browser_category = 0;
+            if (most_played_count) most_played_sel = step % most_played_count;
+            state = STATE_MOST_PLAYED;
+            break;
+        case 1:
+            browser_category = 1;
+            if (browse_genre_count) browse_genre_sel = step % browse_genre_count;
+            state = browse_genre_count ? STATE_BROWSE_CATS : STATE_HOME;
+            break;
+        case 2:
+            browser_category = 2;
+            if (sys_count) sys_sel = step % sys_count;
+            state = sys_count ? STATE_SYSTEMS : STATE_HOME;
+            break;
+        case 3:
+            browser_category = 3;
+            if (favorite_count) favorite_sel = step % favorite_count;
+            state = STATE_FAVORITES;
+            break;
+        case 4:
+            browser_category = 4;
+            state = STATE_SETTINGS;
+            break;
+        default:
+            browser_category = 4;
+            home_section = 2;
+            state = STATE_HOME;
+            break;
+    }
+    if (font_list_count > 1 && step % 5 == 0)
+        apply_font_index((step / 5) % font_list_count);
+    if (theme_list_count > 1 && step % 12 == 0)
+        preview_theme_index((step / 12) % theme_list_count);
 }
 
 static void fill_rect(int x, int y, int w, int h, Uint32 color);
@@ -5947,6 +5988,12 @@ int main(int argc, char *argv[]) {
     const char *autotest_env = getenv("POCKETOS_AUTOTEST_FRAMES");
     int autotest_frames = autotest_env ? atoi(autotest_env) : 0;
     int frames = 0;
+    int stress_test = getenv("POCKETOS_STRESS_TEST") != NULL;
+    int stress_frames = 0;
+    const char *stress_seconds_env = getenv("POCKETOS_STRESS_TEST_SECONDS");
+    int stress_seconds = stress_seconds_env ? atoi(stress_seconds_env) : 0;
+    time_t stress_end = stress_test && stress_seconds > 0
+                      ? time(NULL) + stress_seconds : 0;
 
     { LogTimer _t = log_timer_begin("SDL_Init");
       if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -6173,6 +6220,16 @@ int main(int argc, char *argv[]) {
             }
         }
 
+        if (stress_test && ++stress_frames % 60 == 0) {
+            run_stress_step(stress_frames / 60);
+            g_last_input = time(NULL);  /* keep the stress test awake */
+            if (g_idle_dimmed) {
+                apply_brightness(g_pre_dim_brightness);
+                g_idle_dimmed = 0;
+            }
+            g_dirty = 1;
+        }
+
         /* Idle backlight dim: after 30s no input, drop brightness 3 steps */
         {
             time_t now = time(NULL);
@@ -6224,6 +6281,7 @@ int main(int argc, char *argv[]) {
         if (autotest_frames > 0 && ++frames >= autotest_frames) {
             running = 0;
         }
+        if (stress_end && time(NULL) >= stress_end) running = 0;
     }
 
     health_log_sample("exit");
