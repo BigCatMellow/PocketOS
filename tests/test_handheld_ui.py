@@ -168,6 +168,14 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("#define HEALTH_LOG_MAX_BYTES (512 * 1024)", self.source)
         self.assertIn('health_log_sample("minute");', self.source)
 
+    def test_health_monitor_parses_proc_files_line_by_line(self):
+        start = self.source.index("static long proc_kb_value")
+        end = self.source.index("static void health_log_sample", start)
+        parser = self.source[start:end]
+        self.assertIn("fgets(line, sizeof(line), f)", parser)
+        self.assertIn("strtol(p, &end, 10)", parser)
+        self.assertNotIn("fscanf", parser)
+
     def test_terminal_stress_test_is_explicit_and_timed(self):
         self.assertIn('getenv("POCKETOS_STRESS_TEST")', self.source)
         self.assertIn('getenv("POCKETOS_STRESS_TEST_SECONDS")', self.source)

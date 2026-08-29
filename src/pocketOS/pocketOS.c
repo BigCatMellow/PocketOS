@@ -1348,13 +1348,20 @@ static void log_state_if_changed(int cur) {
 static long proc_kb_value(const char *path, const char *label) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
-    char key[64];
-    long value;
-    while (fscanf(f, "%63s %ld", key, &value) == 2) {
-        if (strcmp(key, label) == 0) {
+    char line[256];
+    size_t label_len = strlen(label);
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, label, label_len) != 0) continue;
+        const char *p = line + label_len;
+        while (*p && isspace((unsigned char)*p)) p++;
+        errno = 0;
+        char *end = NULL;
+        long value = strtol(p, &end, 10);
+        if (end != p && errno != ERANGE) {
             fclose(f);
             return value;
         }
+        break;
     }
     fclose(f);
     return -1;

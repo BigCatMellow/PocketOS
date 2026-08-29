@@ -342,31 +342,36 @@ def _rom_score(name: str) -> int:
     return score
 
 def clean_variants(folder: Path, log) -> int:
+    """Report likely variants without deleting or moving user files."""
     rom_files = [f for f in sorted(folder.iterdir())
                  if f.is_file() and f.suffix.lower() in ROM_EXTS]
     groups: dict = {}
     for f in rom_files:
         groups.setdefault(_base_name(f.stem), []).append(f)
-    removed = 0
+    flagged = 0
     for files in groups.values():
         if len(files) == 1:
             continue
         scored = sorted(files, key=lambda f: (-_rom_score(f.name), f.name))
-        log(f"    keep:   {scored[0].name}")
+        log(f"    suggested keep: {scored[0].name}")
         for f in scored[1:]:
-            log(f"    remove: {f.name}")
-            f.unlink()
-            removed += 1
-    return removed
+            log(f"    possible variant (no action): {f.name}")
+            flagged += 1
+    return flagged
 
 
 # ── Genre scan helpers ────────────────────────────────────────────────────────
 
 def _crc32_of(path: Path) -> str:
     try:
+        crc = 0
         with open(path, "rb") as f:
-            data = f.read(64 * 1024 * 1024)
-        return f"{zlib.crc32(data) & 0xFFFFFFFF:08X}"
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                crc = zlib.crc32(chunk, crc)
+        return f"{crc & 0xFFFFFFFF:08X}"
     except Exception:
         return ""
 
@@ -405,9 +410,25 @@ def _write_gamelist(games: list, dest: Path):
     pretty = minidom.parseString(ET.tostring(root, encoding="unicode")).toprettyxml(indent="  ", encoding=None)
     dest.write_text(pretty, encoding="utf-8")
 
+def _write_xml_atomic(tree: ET.ElementTree, dest: Path):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=".tmp", dir=dest.parent)
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        with tmp.open("wb") as handle:
+            tree.write(handle, encoding="utf-8", xml_declaration=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, dest)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
 def scan_genres_for_system(roms_root: Path, system_folder: str, db_path: Path, log) -> int:
-    system_dir  = roms_root / system_folder
-    gamelist    = system_dir / "miyoogamelist.xml"
+    system_dir = roms_root / system_folder
+    gamelist = system_dir / "miyoogamelist.xml"
     system_name = SYSTEM_MAP.get(system_folder.upper())
     if not system_name:
         return 0
@@ -416,9 +437,26 @@ def scan_genres_for_system(roms_root: Path, system_folder: str, db_path: Path, l
     except Exception as e:
         log(f"    DB open failed: {e}")
         return 0
-    existing = _load_existing(gamelist)
-    games    = list(existing.values())
-    added    = 0
+
+    if gamelist.exists():
+        try:
+            tree = ET.parse(gamelist)
+        except (ET.ParseError, OSError) as e:
+            db.close()
+            log(f"    ERROR: refusing to overwrite malformed gamelist: {e}")
+            return 0
+        root = tree.getroot()
+    else:
+        root = ET.Element("gameList")
+        tree = ET.ElementTree(root)
+
+    existing = {}
+    for el in root.findall("game"):
+        rel = (el.findtext("path") or "").lstrip("./")
+        if rel:
+            existing[rel] = el
+
+    added = 0
     for rom in sorted(system_dir.iterdir()):
         if rom.suffix.lower() in {".xml", ".db", ".txt", ""} or not rom.is_file():
             continue
@@ -426,11 +464,14 @@ def scan_genres_for_system(roms_root: Path, system_folder: str, db_path: Path, l
             continue
         result = _db_lookup(db, rom, system_name)
         name, genre = result if result else (rom.stem, "Unsorted")
-        games.append({"path": rom.name, "name": name, "genre": genre})
+        el = ET.SubElement(root, "game")
+        ET.SubElement(el, "path").text = "./" + rom.name
+        ET.SubElement(el, "name").text = name
+        ET.SubElement(el, "genre").text = genre
         added += 1
     db.close()
     if added:
-        _write_gamelist(games, gamelist)
+        _write_xml_atomic(tree, gamelist)
     return added
 
 def apply_overrides(roms_root: Path, system_folder: str, overrides: dict, log) -> int:
@@ -452,8 +493,7 @@ def apply_overrides(roms_root: Path, system_folder: str, overrides: dict, log) -
             genre_el.text = overrides[name]
             changed += 1
     if changed:
-        pretty = minidom.parseString(ET.tostring(root, encoding="unicode")).toprettyxml(indent="  ", encoding=None)
-        gamelist.write_text(pretty, encoding="utf-8")
+        _write_xml_atomic(tree, gamelist)
     return changed
 
 def _asset_dir() -> Path:
@@ -650,7 +690,7 @@ class Installer:
                 rom_src   = None
                 do_import = False
             else:
-                do_clean = input("  Remove duplicate/bad dumps? [Y/n] ").strip().lower() != "n"
+                do_clean = input("  Analyze possible duplicate/bad-dump variants? [y/N] ").strip().lower() == "y"
 
         print()
         _head("── Phase 1: Installing PocketOS ──")
@@ -686,14 +726,14 @@ class Installer:
             _ok(f"Extracted {extracted_total} file(s), {skipped} unrecognised skipped")
 
             if do_clean and affected_systems:
-                _head("── Phase 2b: Removing duplicate/bad dumps ──")
-                total_removed = 0
+                _head("── Phase 2b: Analyzing possible variants (no files deleted) ──")
+                total_flagged = 0
                 for sys_folder in sorted(affected_systems):
-                    removed = clean_variants(roms_root / sys_folder, _log)
-                    if removed:
-                        _ok(f"{sys_folder}: removed {removed} variant(s)")
-                        total_removed += removed
-                _ok(f"Total removed: {total_removed}")
+                    flagged = clean_variants(roms_root / sys_folder, _log)
+                    if flagged:
+                        _ok(f"{sys_folder}: flagged {flagged} possible variant(s)")
+                        total_flagged += flagged
+                _ok(f"Total flagged: {total_flagged}; no ROM files were changed")
         else:
             _info("Phase 2: ROM import skipped")
             if roms_root.is_dir():

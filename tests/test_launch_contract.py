@@ -31,6 +31,49 @@ class LaunchContractTests(unittest.TestCase):
         self.assertIn("onion_write_quoted_arg", source)
         self.assertNotIn("shell_write_quoted", source)
 
+    def test_onion_preprocess_neutralizes_dollar_command_substitution(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            pwned = root / "pwned"
+            arg_out = root / "arg.txt"
+            launcher = root / "launch.sh"
+            launcher.write_text('#!/bin/sh\nprintf "%s" "$1" > "$ARG_OUT"\n')
+            launcher.chmod(0o755)
+            rom = f"{root}/Game $(touch {pwned}).gba"
+            command = f'"{launcher}" "{rom}"'
+            parsed = onion_runtime_rompath(command)
+            if "$" in parsed:
+                command = command.replace("$", r"\$")
+            env = os.environ.copy()
+            env["ARG_OUT"] = str(arg_out)
+            script = root / "cmd_to_run.sh"
+            script.write_text(command + "\n")
+            subprocess.run(["/bin/sh", str(script)], env=env, check=True)
+            self.assertFalse(pwned.exists())
+            self.assertEqual(rom, arg_out.read_text())
+
+    def test_shell_metacharacters_inside_onion_quotes_remain_data(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            pwned = root / "pwned"
+            arg_out = root / "arg.txt"
+            launcher = root / "launch.sh"
+            launcher.write_text('#!/bin/sh\nprintf "%s" "$1" > "$ARG_OUT"\n')
+            launcher.chmod(0o755)
+            rom = f"{root}/Game ; touch {pwned} & nope | still.gba"
+            command = f'"{launcher}" "{rom}"'
+            env = os.environ.copy()
+            env["ARG_OUT"] = str(arg_out)
+            script = root / "cmd_to_run.sh"
+            script.write_text(command + "\n")
+            subprocess.run(["/bin/sh", str(script)], env=env, check=True)
+            self.assertFalse(pwned.exists())
+            self.assertEqual(rom, arg_out.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

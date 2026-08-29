@@ -54,6 +54,14 @@ def report(path: Path, title: str, rss_key: str) -> tuple[int | None, int]:
     print(f"Process memory (RSS): {span(rss, 'KB')}")
     print(f"Available system memory: {span(memory, 'KB')}")
     print(f"Battery readings: {span(battery, '%')}")
+    if not rss or not memory:
+        missing = []
+        if not rss:
+            missing.append(rss_key)
+        if not memory:
+            missing.append("mem_available_kb")
+        print("INVALID TELEMETRY: no valid " + ", ".join(missing) + " samples were recorded.")
+        return None, 2
     print(f"Last event: {rows[-1].get('event', 'unknown')} on {rows[-1].get('screen', rows[-1].get('launcher', 'unknown'))}")
     if len(rss) >= 10 and rss[-1] > rss[0] + 4096:
         print("Note: process memory rose by more than 4 MB across this log. Send this file for review.")

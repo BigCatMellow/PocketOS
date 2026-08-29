@@ -1,8 +1,13 @@
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
+from unittest.mock import patch
 
-from tools.installer import audit_install, detect_onion, install_from_dir, uninstall
+from tools.installer import (
+    _crc32_of, audit_install, clean_variants, detect_onion,
+    install_from_dir, scan_genres_for_system, uninstall,
+)
 from tools.install_runtime import install_payload
 from tools.onion_runtime import BEGIN_MARKER
 
@@ -96,6 +101,69 @@ class InstallerTests(unittest.TestCase):
             runtime.write_text(runtime.read_text() + BEGIN_MARKER)
             errors, _warnings = audit_install(sd, payload)
         self.assertTrue(any("markers are incomplete" in error for error in errors))
+
+    def test_variant_analysis_never_deletes_multidisc_or_cue_bin_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            names = ["Final Fantasy VII (Disc 1).chd", "Final Fantasy VII (Disc 2).chd",
+                     "Final Fantasy VII (Disc 3).chd", "Metal Gear Solid.bin", "Metal Gear Solid.cue"]
+            for name in names:
+                (folder / name).write_bytes(b"rom")
+            logs = []
+            flagged = clean_variants(folder, logs.append)
+            self.assertGreater(flagged, 0)
+            self.assertEqual(set(names), {item.name for item in folder.iterdir()})
+            self.assertTrue(any("no action" in line for line in logs))
+
+    def test_crc32_reads_past_64_mib(self):
+        with tempfile.TemporaryDirectory() as temp:
+            rom = Path(temp) / "large.bin"
+            block = b"PocketOS" * 1024
+            crc = 0
+            with rom.open("wb") as handle:
+                remaining = 64 * 1024 * 1024 + 17
+                while remaining:
+                    chunk = block[:min(len(block), remaining)]
+                    handle.write(chunk)
+                    crc = zlib.crc32(chunk, crc)
+                    remaining -= len(chunk)
+            self.assertEqual(f"{crc & 0xFFFFFFFF:08X}", _crc32_of(rom))
+
+    def test_genre_scan_preserves_existing_metadata(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            system = root / "GBA"
+            system.mkdir()
+            (system / "Existing.gba").write_bytes(b"old")
+            (system / "New.gba").write_bytes(b"new")
+            gamelist = system / "miyoogamelist.xml"
+            gamelist.write_text('<gameList><game><path>./Existing.gba</path><name>Existing</name><genre>Action</genre><image>./Imgs/existing.png</image><desc>Keep this description</desc><rating>0.9</rating></game></gameList>', encoding="utf-8")
+            db = root / "dummy.sqlite"
+            db.touch()
+            with patch("tools.installer._db_lookup", return_value=("New Game", "Puzzle")):
+                added = scan_genres_for_system(root, "GBA", db, lambda _m: None)
+            self.assertEqual(1, added)
+            result = gamelist.read_text(encoding="utf-8")
+            self.assertIn("./Imgs/existing.png", result)
+            self.assertIn("Keep this description", result)
+            self.assertIn("<rating>0.9</rating>", result)
+            self.assertIn("New Game", result)
+
+    def test_genre_scan_refuses_to_overwrite_malformed_xml(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            system = root / "GBA"
+            system.mkdir()
+            (system / "Game.gba").write_bytes(b"rom")
+            gamelist = system / "miyoogamelist.xml"
+            original = b"<gameList><game>broken"
+            gamelist.write_bytes(original)
+            db = root / "dummy.sqlite"
+            db.touch()
+            logs = []
+            self.assertEqual(0, scan_genres_for_system(root, "GBA", db, logs.append))
+            self.assertEqual(original, gamelist.read_bytes())
+            self.assertTrue(any("refusing to overwrite" in line for line in logs))
 
 
 if __name__ == "__main__":
