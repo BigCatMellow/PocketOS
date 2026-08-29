@@ -85,18 +85,20 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("THEME_VARIANTS", renderer)
 
     def test_light_onion_theme_is_available(self):
-        theme = (ROOT / "assets" / "res" / "pocketos" / "theme_onion.json").read_text(
-            encoding="utf-8"
+        theme = json.loads(
+            (ROOT / "assets" / "res" / "pocketos" / "theme_onion.json").read_text(
+                encoding="utf-8"
+            )
         )
         self.assertIn("C_BG          = RGBA(0xF8, 0xF1, 0xE6)", self.source)
         self.assertIn("C_BAR         = RGBA(0xFF, 0xFD, 0xF8)", self.source)
         self.assertIn("C_SEL         = RGBA(0x7D, 0x3C, 0xFF)", self.source)
         self.assertNotIn("C_BAR         = RGBA(0x07, 0x1A, 0x33)", self.source)
-        self.assertIn('"bg":            "#F8F1E6"', theme)
-        self.assertIn('"bar":           "#FFFDF8"', theme)
-        self.assertIn('"sel":           "#7D3CFF"', theme)
-        self.assertIn('"sel_border":    "#5C1FE0"', theme)
-        self.assertIn('"text":          "#251934"', theme)
+        self.assertEqual("#F8F1E6", theme["bg"])
+        self.assertEqual("#FFFDF8", theme["bar"])
+        self.assertEqual("#7D3CFF", theme["sel"])
+        self.assertEqual("#5C1FE0", theme["sel_border"])
+        self.assertEqual("#251934", theme["text"])
 
     def test_light_theme_presets_cover_distinct_surfaces(self):
         theme_dir = ROOT / "assets" / "res" / "pocketos"
@@ -117,6 +119,17 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertEqual("#7D3CFF", json.loads((theme_dir / "theme_onion.json").read_text())["sel"])
         self.assertEqual("#7834F8", json.loads((theme_dir / "theme_ink.json").read_text())["sel"])
         self.assertEqual("#6F2DFF", json.loads((theme_dir / "theme_snow.json").read_text())["sel"])
+
+    def test_all_theme_backgrounds_are_light(self):
+        theme_dir = ROOT / "assets" / "res" / "pocketos"
+        for path in sorted(theme_dir.glob("theme_*.json")):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            for key in ("bg", "bar", "card"):
+                color = data[key].lstrip("#")
+                r, g, b = (int(color[i:i + 2], 16) for i in (0, 2, 4))
+                luma = (299 * r + 587 * g + 114 * b) // 1000
+                self.assertGreaterEqual(luma, 225, f"{path.name} {key} is too dark")
+            self.assertEqual("#FFFFFF", data["white"], f"{path.name} selected text is not white")
 
     def test_device_info_uses_onion_runtime_version_sources(self):
         self.assertIn('/.tmp_update/onionVersion/version.txt', self.source)
