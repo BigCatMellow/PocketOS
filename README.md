@@ -37,6 +37,12 @@ Requires Onion OS to be installed first. If you haven't set that up yet, grab it
 
 ---
 
+## Fonts
+
+Use **Settings → Appearance → Font** to choose a typeface. PocketOS includes compact, high-legibility options for the Miyoo Mini Plus display: DejaVu Sans, Lato, Noto Sans, Roboto Condensed, and Kenney Future Narrow.
+
+---
+
 ## Install
 
 ### PocketOS Setup Suite (recommended)
