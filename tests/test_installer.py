@@ -1,12 +1,13 @@
 import tempfile
 import unittest
+import zipfile
 import zlib
 from pathlib import Path
 from unittest.mock import patch
 
 from tools.installer import (
     POCKETOS_TRANSACTION_PATHS, _crc32_of, _select_candidate, audit_install,
-    clean_variants, detect_onion, install_from_dir, scan_genres_for_system, uninstall,
+    clean_variants, detect_onion, extract_zip, install_from_dir, scan_genres_for_system, uninstall,
 )
 from tools.install_runtime import install_payload
 from tools.onion_runtime import BEGIN_MARKER
@@ -280,6 +281,23 @@ class InstallerTests(unittest.TestCase):
                 "onion-baseline-monitor.sh", "launcher-comparison-monitor.sh",
             ):
                 self.assertFalse((sd / name).exists(), name)
+
+    def test_installer_zip_extraction_is_streamed_and_system_scoped(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "mixed.zip"
+            dest = root / "GBA"
+            dest.mkdir()
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr("Game.gba", b"gba-data")
+                zf.writestr("WrongSystem.gb", b"gb-data")
+
+            with patch.object(zipfile.ZipFile, "read", side_effect=AssertionError("must stream")):
+                extracted = extract_zip(archive, dest, {".gba"}, lambda _message: None)
+
+            self.assertEqual(["Game.gba"], [path.name for path in extracted])
+            self.assertEqual(b"gba-data", (dest / "Game.gba").read_bytes())
+            self.assertFalse((dest / "WrongSystem.gb").exists())
 
 
 if __name__ == "__main__":

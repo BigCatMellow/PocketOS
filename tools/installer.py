@@ -32,6 +32,11 @@ try:
 except ImportError:  # Direct script and PyInstaller execution.
     from genre_overrides import load_overrides as load_genre_overrides
 
+try:
+    from .rom_safety import crc32_of, extract_zip_roms
+except ImportError:  # Direct script and PyInstaller execution.
+    from rom_safety import crc32_of, extract_zip_roms
+
 # ── Bundled assets path ───────────────────────────────────────────────────────
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys._MEIPASS) / "payload"
@@ -363,24 +368,9 @@ def find_system_folder(roms_root: Path, candidates: list):
             return p
     return None
 
-def extract_zip(zip_path: Path, dest_folder: Path, log) -> list:
-    extracted = []
-    try:
-        with zipfile.ZipFile(zip_path) as zf:
-            for member in [n for n in zf.namelist() if not n.endswith("/")]:
-                ext = Path(member).suffix.lower()
-                if ext not in ROM_EXTS or _is_doc_file(member):
-                    continue
-                out_path = dest_folder / Path(member).name
-                if out_path.exists():
-                    log(f"    SKIP (exists): {out_path.name}")
-                    continue
-                out_path.write_bytes(zf.read(member))
-                extracted.append(out_path)
-                log(f"    extracted: {out_path.name}")
-    except Exception as e:
-        log(f"    ERROR reading {zip_path.name}: {e}")
-    return extracted
+def extract_zip(zip_path: Path, dest_folder: Path, allowed_extensions, log) -> list:
+    """Use the shared preflighted, streamed, atomic ZIP extractor."""
+    return extract_zip_roms(zip_path, dest_folder, set(allowed_extensions), log)
 
 
 # ── Variant cleanup ───────────────────────────────────────────────────────────
@@ -434,17 +424,7 @@ def clean_variants(folder: Path, log) -> int:
 # ── Genre scan helpers ────────────────────────────────────────────────────────
 
 def _crc32_of(path: Path) -> str:
-    try:
-        crc = 0
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(1024 * 1024)
-                if not chunk:
-                    break
-                crc = zlib.crc32(chunk, crc)
-        return f"{crc & 0xFFFFFFFF:08X}"
-    except Exception:
-        return ""
+    return crc32_of(path)
 
 def _db_lookup(db, rom: Path, system_name: str):
     crc = _crc32_of(rom)
@@ -796,7 +776,7 @@ class Installer:
                     skipped += 1
                     continue
                 _info(f"[{dest_folder.name}] {zip_path.name}")
-                new_files = extract_zip(zip_path, dest_folder, _log)
+                new_files = extract_zip(zip_path, dest_folder, {ext}, _log)
                 extracted_total += len(new_files)
                 if new_files:
                     affected_systems.add(dest_folder.name)

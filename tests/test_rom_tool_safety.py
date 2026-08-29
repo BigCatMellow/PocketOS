@@ -120,3 +120,14 @@ class RomToolSafetyTests(unittest.TestCase):
             path.write_text("<gameList><game>", encoding="utf-8")
             with self.assertRaises(Exception):
                 load_gamelist_tree(path)
+
+
+class RomImporterUiSafetyTests(unittest.TestCase):
+    def test_variant_analysis_is_truthfully_non_destructive_and_tk_state_is_captured(self):
+        source = (Path(__file__).resolve().parents[1] / "tools" / "rom_importer.py").read_text()
+        self.assertIn('self._clean_requested = bool(self.clean_var.get())', source)
+        worker = source[source.index("    def _do_import(self):"):]
+        self.assertNotIn("self.clean_var.get()", worker)
+        self.assertIn("Analyzing possible duplicate/bad/hack variants (no deletion)", source)
+        self.assertNotIn("Removing duplicate/bad/hack variants", source)
+

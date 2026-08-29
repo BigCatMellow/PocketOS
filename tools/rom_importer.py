@@ -345,6 +345,8 @@ class App(tk.Tk):
         self.after(0, _do)
 
     def _run(self):
+        # Tk variables belong to the UI thread; hand the worker a plain bool.
+        self._clean_requested = bool(self.clean_var.get())
         self.run_btn.config(state="disabled")
         self.progress.start()
         threading.Thread(target=self._import_thread, daemon=True).start()
@@ -433,17 +435,17 @@ class App(tk.Tk):
             for sys_folder in sorted(affected_systems):
                 apply_overrides_for_system(roms_root, sys_folder, overrides, self.log)
 
-        # Variant cleanup (optional)
-        if self.clean_var.get() and affected_systems:
-            self.log("\n── Removing duplicate/bad/hack variants ──")
-            total_removed = 0
+        # Variant analysis (optional, deliberately non-destructive)
+        if getattr(self, "_clean_requested", False) and affected_systems:
+            self.log("\n── Analyzing possible duplicate/bad/hack variants (no deletion) ──")
+            total_flagged = 0
             for sys_folder in sorted(affected_systems):
                 folder = roms_root / sys_folder
-                removed = clean_variants(folder, self.log)
-                if removed:
-                    self.log(f"  {sys_folder}: removed {removed} variant(s)")
-                    total_removed += removed
-            self.log(f"  total removed: {total_removed}")
+                flagged = clean_variants(folder, self.log)
+                if flagged:
+                    self.log(f"  {sys_folder}: flagged {flagged} possible variant(s)")
+                    total_flagged += flagged
+            self.log(f"  total flagged: {total_flagged}; no ROM files changed")
 
         self.log("\n✓ All done. Eject SD card and boot.")
 
