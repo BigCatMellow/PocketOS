@@ -1,0 +1,27 @@
+name: Apply SD selection safety fix
+
+on:
+  push:
+    branches: [maps-reliability-v1.3]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: maps-reliability-v1.3
+          fetch-depth: 0
+      - run: python3 tools/_maps_sd_fix.py
+      - run: python3 -m unittest discover -v
+      - name: Commit verified fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/installer.py tests/test_installer.py docs/roadmap-v1.3-reliability.md
+          git commit -m "fix: require explicit SD card selection"
+          git push origin HEAD:maps-reliability-v1.3
