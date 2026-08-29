@@ -43,6 +43,12 @@ class RuntimeTextTests(unittest.TestCase):
             script.flush()
             subprocess.run(["bash", "-n", script.name], check=True)
 
+    def test_stress_marker_launches_pocketos_after_terminal_closes(self):
+        patched = patch_runtime_text(STOCK_RUNTIME)
+        self.assertIn("pocketos_stress_test_seconds", patched)
+        self.assertIn("POCKETOS_STRESS_TEST=1", patched)
+        self.assertIn('POCKETOS_STRESS_TEST_SECONDS="$pocketos_stress_seconds"', patched)
+
     def test_unpatch_removes_only_managed_hook(self):
         restored = unpatch_runtime_text(patch_runtime_text(STOCK_RUNTIME))
         self.assertNotIn(BEGIN_MARKER, restored)

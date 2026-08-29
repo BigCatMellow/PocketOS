@@ -35,8 +35,8 @@ class HandheldUiContractTests(unittest.TestCase):
         ]
         self.assertNotIn("SDL_SetAlpha", primary_shell)
 
-    def test_release_version_is_1_2_6(self):
-        self.assertIn('#define POCKETOS_VERSION "1.2.6"', self.source)
+    def test_release_version_is_1_2_7(self):
+        self.assertIn('#define POCKETOS_VERSION "1.2.7"', self.source)
 
     def test_library_system_rows_do_not_repeat_names_in_badges(self):
         library = self.source[
@@ -181,8 +181,8 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn('getenv("POCKETOS_STRESS_TEST_SECONDS")', self.source)
         self.assertIn("static void run_stress_step(int step)", self.source)
         runner = (ROOT / "tools" / "pocketos_stress_test.sh").read_text(encoding="utf-8")
-        self.assertIn("POCKETOS_STRESS_TEST=1", runner)
-        self.assertIn("POCKETOS_STRESS_TEST_SECONDS", runner)
+        self.assertIn("pocketos_stress_test_seconds", runner)
+        self.assertIn("Press MENU once to close Terminal", runner)
 
     def test_onion_baseline_monitor_is_separate_and_bounded(self):
         runner = (ROOT / "tools" / "onion_baseline_monitor.sh").read_text(encoding="utf-8")

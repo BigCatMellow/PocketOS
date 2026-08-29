@@ -16,12 +16,9 @@ SECONDS=$((MINUTES * 60))
 mkdir -p "$SDROOT/.tmp_update/logs"
 touch "$SDROOT/.tmp_update/logs/pocketos_health.csv"
 
-echo "PocketOS stress test: $MINUTES minute(s)"
-echo "It cycles launcher screens, fonts, and theme previews."
-echo "It will not launch games or save appearance changes."
+printf '%s\n' "$SECONDS" > "$SDROOT/.tmp_update/pocketos_stress_test_seconds"
 
-POCKETOS_STRESS_TEST=1 POCKETOS_STRESS_TEST_SECONDS="$SECONDS" \
-    "$SDROOT/.tmp_update/bin/pocketOS"
-
-echo "Finished. Copy .tmp_update/logs/pocketos_health.csv to your computer"
-echo "and run pocketos-health-report.py against the SD card."
+echo "Stress test queued for $MINUTES minute(s)."
+echo "Press MENU once to close Terminal. PocketOS will then start the test."
+echo "It cycles launcher screens, fonts, and theme previews without launching games"
+echo "or saving appearance changes. Do not press buttons until PocketOS returns to Onion."
