@@ -35,8 +35,8 @@ class HandheldUiContractTests(unittest.TestCase):
         ]
         self.assertNotIn("SDL_SetAlpha", primary_shell)
 
-    def test_release_version_is_1_2_5(self):
-        self.assertIn('#define POCKETOS_VERSION "1.2.5"', self.source)
+    def test_release_version_is_1_2_6(self):
+        self.assertIn('#define POCKETOS_VERSION "1.2.6"', self.source)
 
     def test_library_system_rows_do_not_repeat_names_in_badges(self):
         library = self.source[
@@ -167,6 +167,8 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("if (stat(HEALTH_LOG_PATH, &st) != 0) return", self.source)
         self.assertIn("#define HEALTH_LOG_MAX_BYTES (512 * 1024)", self.source)
         self.assertIn('health_log_sample("minute");', self.source)
+        self.assertIn("while (fgets(line, sizeof(line), f))", self.source)
+        self.assertIn('sscanf(line, "%63s %ld", key, &value)', self.source)
 
     def test_terminal_stress_test_is_explicit_and_timed(self):
         self.assertIn('getenv("POCKETOS_STRESS_TEST")', self.source)

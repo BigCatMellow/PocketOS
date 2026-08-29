@@ -141,7 +141,7 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #ifndef FONT_PRIMARY
 #define FONT_PRIMARY POCKETOS_ROOT "/miyoo/app/BPreplayBold.otf"
 #endif
-#define POCKETOS_VERSION "1.2.5"
+#define POCKETOS_VERSION "1.2.6"
 #define ONION_BASE_VERSION "v4.3.1-1"
 
 // ── Button mappings (from Onion keymap_sw.h) ─────────────────────────────────
@@ -1349,8 +1349,13 @@ static long proc_kb_value(const char *path, const char *label) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
     char key[64];
-    long value;
-    while (fscanf(f, "%63s %ld", key, &value) == 2) {
+    char line[256];
+    long value = -1;
+    /* /proc/self/status starts with text fields (for example, Name: pocketOS).
+       Parse each line independently so one non-numeric field cannot stop the
+       scan before VmRSS or MemAvailable is reached. */
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "%63s %ld", key, &value) != 2) continue;
         if (strcmp(key, label) == 0) {
             fclose(f);
             return value;

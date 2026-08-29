@@ -2,7 +2,7 @@
 
 A focused game launcher for the [Miyoo Mini Plus](https://lomiyoo.com/), built on top of [Onion OS](https://github.com/OnionUI/Onion). The five-category interface keeps Most Played, Browse, Library, Favorites, and Settings one shoulder press apart while retaining Onion's emulators, apps, and runtime.
 
-PocketOS 1.2.5 implements the latest low-overhead design in [the handheld UI notes](docs/handheld-ui-redesign.md): five visible rows, flat high-contrast colors, real library counts, and no thumbnails or GPU-heavy effects.
+PocketOS 1.2.6 implements the latest low-overhead design in [the handheld UI notes](docs/handheld-ui-redesign.md): five visible rows, flat high-contrast colors, real library counts, and no thumbnails or GPU-heavy effects.
 
 Requires Onion OS to be installed first. If you haven't set that up yet, grab it [here](https://github.com/OnionUI/Onion/releases/latest). The boot screen flasher is included on your SD card under Apps once Onion is installed.
 
