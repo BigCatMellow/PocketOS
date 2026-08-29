@@ -141,7 +141,7 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #ifndef FONT_PRIMARY
 #define FONT_PRIMARY POCKETOS_ROOT "/miyoo/app/BPreplayBold.otf"
 #endif
-#define POCKETOS_VERSION "1.2.4"
+#define POCKETOS_VERSION "1.2.5"
 #define ONION_BASE_VERSION "v4.3.1-1"
 
 // ── Button mappings (from Onion keymap_sw.h) ─────────────────────────────────

@@ -3,7 +3,7 @@
   "version": 1,
   "project": {
     "name": "PocketOS",
-    "pocketos_version": "1.2.4",
+    "pocketos_version": "1.2.5",
     "onion_base": "v4.3.1-1"
   },
   "toolchain": {
@@ -25,7 +25,7 @@
         },
         {
           "path": "src/pocketOS/pocketOS.c",
-          "text": "#define POCKETOS_VERSION \"1.2.4\""
+          "text": "#define POCKETOS_VERSION \"1.2.5\""
         },
         {
           "path": "src/pocketOS/pocketOS.c",

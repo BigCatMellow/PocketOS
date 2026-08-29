@@ -36,13 +36,14 @@ PAYLOAD_RES = BASE_DIR / ".tmp_update" / "res" / "pocketos"
 PAYLOAD_HEALTH_REPORT = BASE_DIR / "pocketos-health-report.py"
 PAYLOAD_STRESS_TEST = BASE_DIR / "pocketos-stress-test.sh"
 PAYLOAD_ONION_MONITOR = BASE_DIR / "onion-baseline-monitor.sh"
+PAYLOAD_COMPARISON_MONITOR = BASE_DIR / "launcher-comparison-monitor.sh"
 RUNTIME_REL = Path(".tmp_update") / "runtime.sh"
 
 ONION_URL   = "https://github.com/OnionUI/Onion/releases/latest"
 GITHUB_API  = "https://api.github.com/repos/BigCatMellow/PocketOS/releases/latest"
 GITHUB_REPO = "https://github.com/BigCatMellow/PocketOS/releases/latest"
 
-VERSION = "v1.2.4"
+VERSION = "v1.2.5"
 
 
 # ── ROM import constants ──────────────────────────────────────────────────────
@@ -207,6 +208,7 @@ def install_from_dir(src: Path, sd: Path, log):
     report_dest = sd / "pocketos-health-report.py"
     stress_dest = sd / "pocketos-stress-test.sh"
     onion_monitor_dest = sd / "onion-baseline-monitor.sh"
+    comparison_monitor_dest = sd / "launcher-comparison-monitor.sh"
     if not bin_src.exists():
         raise FileNotFoundError(f"Binary not found: {bin_src}")
     if not res_src.is_dir():
@@ -223,6 +225,9 @@ def install_from_dir(src: Path, sd: Path, log):
     if PAYLOAD_ONION_MONITOR.is_file():
         _copy_file_atomic(PAYLOAD_ONION_MONITOR, onion_monitor_dest)
         onion_monitor_dest.chmod(0o755)
+    if PAYLOAD_COMPARISON_MONITOR.is_file():
+        _copy_file_atomic(PAYLOAD_COMPARISON_MONITOR, comparison_monitor_dest)
+        comparison_monitor_dest.chmod(0o755)
     log("  Copying PocketOS launcher...")
     _copy_file_atomic(bin_src, bin_dest / "pocketOS")
     (bin_dest / "pocketOS").chmod(0o755)

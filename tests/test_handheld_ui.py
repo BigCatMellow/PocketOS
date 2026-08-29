@@ -35,8 +35,8 @@ class HandheldUiContractTests(unittest.TestCase):
         ]
         self.assertNotIn("SDL_SetAlpha", primary_shell)
 
-    def test_release_version_is_1_2_4(self):
-        self.assertIn('#define POCKETOS_VERSION "1.2.4"', self.source)
+    def test_release_version_is_1_2_5(self):
+        self.assertIn('#define POCKETOS_VERSION "1.2.5"', self.source)
 
     def test_library_system_rows_do_not_repeat_names_in_badges(self):
         library = self.source[
@@ -182,6 +182,14 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("find_mainui_pid", runner)
         self.assertIn("sleep 60", runner)
         self.assertIn("MAX_BYTES", runner)
+
+    def test_paired_comparison_monitor_uses_the_same_schema_for_both_launchers(self):
+        runner = (ROOT / "tools" / "launcher_comparison_monitor.sh").read_text(encoding="utf-8")
+        self.assertIn("pocketos_comparison_health.csv", runner)
+        self.assertIn("onion_comparison_health.csv", runner)
+        self.assertIn("pocketos:pocketOS", runner)
+        self.assertIn("onion:MainUI", runner)
+        self.assertIn("sleep 60", runner)
 
     def test_theme_accents_have_visible_range(self):
         theme_dir = ROOT / "assets" / "res" / "pocketos"
