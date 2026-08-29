@@ -15,13 +15,18 @@ Final proof: PR CI + ARM build + adversarial data-integrity tests + independent 
 - [x] Add PR/main CI and adversarial regressions.
 - [x] Stop invalid SD selection from silently choosing a drive.
 - [x] Consolidate canonical Onion system/folder mappings.
-- [ ] Redesign ambiguous/CD/arcade ZIP importing.
-- [ ] Replace executable Python overrides with data-only overrides.
+- [x] Stop ambiguous disc/archive extensions from silently auto-routing to the wrong system.
+- [ ] Add explicit user-selected import support for ambiguous CD/arcade/Neo Geo formats.
+- [x] Replace executable Python overrides with data-only overrides.
 - [x] Stream ZIP extraction with size/free-space/collision limits.
-- [ ] Add transactional install/uninstall recovery tests.
-- [ ] Run real-device stress validation.
-- [ ] Split launcher modules only after behavior is locked by tests.
-
-- [x] Harden standalone importer/scanner metadata writes.
-
+- [x] Make installer and uninstaller transactional across PocketOS-owned/mutated paths.
+- [x] Add rollback/recovery regression tests for interrupted install and uninstall.
+- [x] Harden the Onion shell handoff against backslash/dollar escape interactions.
+- [x] Harden standalone importer/scanner metadata writes and Tk worker boundaries.
 - [x] Refresh Onion runtime backup when a newer stock runtime is patched.
+- [ ] Run real-device 30-minute stress validation with valid memory telemetry.
+- [ ] Split launcher modules only after behavior is locked by tests; this is maintainability work, not a safety prerequisite.
+
+## Current release gate
+
+Code-side safety work in this arc is ready for PR verification. Do not call the roadmap DONE or treat v1.3 as device-validated until the physical Miyoo stress run and required independent review are complete.
