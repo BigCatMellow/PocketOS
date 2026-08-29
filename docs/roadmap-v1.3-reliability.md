@@ -27,6 +27,10 @@ Final proof: PR CI + ARM build + adversarial data-integrity tests + independent 
 - [ ] Run real-device 30-minute stress validation with valid memory telemetry.
 - [ ] Split launcher modules only after behavior is locked by tests; this is maintainability work, not a safety prerequisite.
 
+## Verification discipline
+
+Code-side approval evidence must be produced from the current PR head. A green run from an earlier revision does not satisfy the gate after any source, test, workflow, or safety-contract change.
+
 ## Current release gate
 
 Code-side safety work in this arc is ready for PR verification. Do not call the roadmap DONE or treat v1.3 as device-validated until the physical Miyoo stress run and required independent review are complete.
