@@ -20,71 +20,14 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 
-# ── Extension → candidate system folder names (first match wins) ─────────────
-EXT_TO_SYSTEMS = {
-    ".nes":  ["FC",  "NES"],
-    ".fds":  ["FC",  "NES"],
-    ".sfc":  ["SFC", "SNES"],
-    ".smc":  ["SFC", "SNES"],
-    ".gb":   ["GB",  "SGB"],
-    ".gbc":  ["GBC"],
-    ".gba":  ["GBA"],
-    ".n64":  ["N64"],
-    ".z64":  ["N64"],
-    ".v64":  ["N64"],
-    ".nds":  ["NDS"],
-    ".md":   ["MD",  "GEN", "GENESIS"],
-    ".smd":  ["MD",  "GEN", "GENESIS"],
-    ".gen":  ["MD",  "GEN", "GENESIS"],
-    ".sms":  ["SMS"],
-    ".gg":   ["GG"],
-    ".pce":  ["PCE"],
-    ".lnx":  ["LYNX"],
-    ".ws":   ["WSWAN"],
-    ".wsc":  ["WSWANC"],
-    ".ngp":  ["NGP"],
-    ".ngc":  ["NGPC"],
-    ".col":  ["COLECO"],
-    ".iso":  ["PS"],
-    ".bin":  ["PS"],
-    ".cue":  ["PS"],
-    ".pbp":  ["PS"],
-    ".chd":  ["PS"],
-    ".img":  ["PS"],
-}
+try:
+    from .onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
+except ImportError:  # Direct script and PyInstaller execution.
+    from onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
 
-# Extensions we consider ROM files (used to peek inside ZIPs)
-ROM_EXTS = set(EXT_TO_SYSTEMS.keys())
-
-# Filenames that look like documentation even if they share a ROM extension
+# ── Onion ROM/system contract ─────────────────────────────────────────────────
+ROM_EXTS = set(ROM_EXTENSIONS)
 DOC_NAMES = {"readme", "license", "changelog", "credits", "notes", "info", "manual"}
-
-# ── System folder → OpenVGDB system name (for genre scanning) ─────────────────
-SYSTEM_MAP = {
-    "FC":       "Nintendo Entertainment System",
-    "NES":      "Nintendo Entertainment System",
-    "SFC":      "Nintendo Super Nintendo Entertainment System",
-    "SNES":     "Nintendo Super Nintendo Entertainment System",
-    "GB":       "Nintendo Game Boy",
-    "SGB":      "Nintendo Game Boy",
-    "GBC":      "Nintendo Game Boy Color",
-    "GBA":      "Nintendo Game Boy Advance",
-    "N64":      "Nintendo 64",
-    "NDS":      "Nintendo DS",
-    "MD":       "Sega Genesis/Mega Drive",
-    "GEN":      "Sega Genesis/Mega Drive",
-    "GENESIS":  "Sega Genesis/Mega Drive",
-    "SMS":      "Sega Master System",
-    "GG":       "Sega Game Gear",
-    "PCE":      "NEC PC Engine/TurboGrafx-16",
-    "LYNX":     "Atari Lynx",
-    "WSWAN":    "Bandai WonderSwan",
-    "WSWANC":   "Bandai WonderSwan Color",
-    "NGP":      "SNK Neo Geo Pocket",
-    "NGPC":     "SNK Neo Geo Pocket Color",
-    "COLECO":   "Coleco ColecoVision",
-    "PS":       "Sony PlayStation",
-}
 
 # ── Genre scanning helpers (inline so we don't depend on genre_scanner.py) ───
 
@@ -171,29 +114,16 @@ def _is_doc_file(name: str) -> bool:
     return stem in DOC_NAMES or any(stem.startswith(d) for d in DOC_NAMES)
 
 def detect_system(zip_path: Path) -> tuple[str | None, list[str]]:
-    """
-    Peek inside the ZIP, find ROM files, return (ext, [candidate folders]).
-    Prefers unambiguous extensions over ambiguous ones (.bin, .img, .iso).
-    Returns (None, []) if nothing recognisable is found.
-    """
-    AMBIGUOUS = {".bin", ".img", ".iso", ".chd"}
+    """Return only extension classifications that are safe without user input."""
     try:
         with zipfile.ZipFile(zip_path) as zf:
-            names = [n for n in zf.namelist() if not n.endswith("/")]
-            best_ext, best_candidates = None, []
-            for name in names:
+            for name in (n for n in zf.namelist() if not n.endswith("/")):
                 if _is_doc_file(name):
                     continue
                 ext = Path(name).suffix.lower()
-                if ext not in EXT_TO_SYSTEMS:
-                    continue
-                candidates = EXT_TO_SYSTEMS[ext]
-                # Prefer unambiguous match; keep looking if we only have ambiguous so far
-                if ext not in AMBIGUOUS:
-                    return ext, candidates
-                if not best_ext:
-                    best_ext, best_candidates = ext, candidates
-            return best_ext, best_candidates
+                candidates = candidates_for_extension(ext)
+                if candidates:
+                    return ext, list(candidates)
     except Exception:
         pass
     return None, []
@@ -230,7 +160,7 @@ def scan_genres_for_system(roms_root: Path, system_folder: str,
     """Scan a single system folder and update its miyoogamelist.xml. Returns count added."""
     system_dir  = roms_root / system_folder
     gamelist    = system_dir / "miyoogamelist.xml"
-    system_name = SYSTEM_MAP.get(system_folder.upper())
+    system_name = openvgdb_system_name(system_folder)
     if not system_name:
         log(f"  genre scan: no DB mapping for {system_folder}, skipping")
         return 0
@@ -251,7 +181,8 @@ def scan_genres_for_system(roms_root: Path, system_folder: str,
         key = rom.name
         if key in existing:
             continue
-        result = db_lookup(db, rom, system_name)
+        rom_system_name = openvgdb_system_name(system_folder, rom.suffix) or system_name
+        result = db_lookup(db, rom, rom_system_name)
         if result:
             name, genre = result
         else:
@@ -521,10 +452,9 @@ class App(tk.Tk):
 
             dest_folder = find_system_folder(roms_root, candidates)
             if dest_folder is None:
-                # Create the first candidate folder
-                dest_folder = roms_root / candidates[0]
-                dest_folder.mkdir(parents=True, exist_ok=True)
-                self.log(f"[+] Created folder: {dest_folder.name}")
+                self.log(f"[{candidates[0]}] {zip_path.name} — Onion system folder is not installed; skipping")
+                skipped += 1
+                continue
 
             self.log(f"[{dest_folder.name}] {zip_path.name}")
             new_files = extract_zip(zip_path, dest_folder, self.log)

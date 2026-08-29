@@ -1714,15 +1714,15 @@ static const char *system_full_name(const char *label) {
     if (strcasecmp(label, "SFC")     == 0) return "Super Famicom";
     if (strcasecmp(label, "SNES")    == 0) return "Super Nintendo";
     if (strcasecmp(label, "N64")     == 0) return "Nintendo 64";
-    if (strcasecmp(label, "VBOY")    == 0) return "Virtual Boy";
+    if (strcasecmp(label, "VB")      == 0 || strcasecmp(label, "VBOY") == 0) return "Virtual Boy";
     if (strcasecmp(label, "MD")      == 0) return "Genesis";
     if (strcasecmp(label, "GEN")     == 0 ||
         strcasecmp(label, "GENESIS") == 0) return "Genesis";
-    if (strcasecmp(label, "SMS")     == 0) return "Master System";
+    if (strcasecmp(label, "MS")      == 0 || strcasecmp(label, "SMS") == 0) return "Master System";
     if (strcasecmp(label, "GG")      == 0) return "Game Gear";
     if (strcasecmp(label, "SATURN")  == 0) return "Saturn";
-    if (strcasecmp(label, "SCD")     == 0) return "Sega CD";
-    if (strcasecmp(label, "32X")     == 0) return "Sega 32X";
+    if (strcasecmp(label, "SEGACD")  == 0 || strcasecmp(label, "SCD") == 0) return "Sega CD";
+    if (strcasecmp(label, "THIRTYTWOX") == 0 || strcasecmp(label, "32X") == 0) return "Sega 32X";
     if (strcasecmp(label, "PS")      == 0 ||
         strcasecmp(label, "PSX")     == 0 ||
         strcasecmp(label, "PS1")     == 0) return "PlayStation";
@@ -1731,15 +1731,16 @@ static const char *system_full_name(const char *label) {
     if (strcasecmp(label, "PCECD")   == 0) return "PC Engine CD";
     if (strcasecmp(label, "PCFX")    == 0) return "PC-FX";
     if (strcasecmp(label, "SGFX")    == 0) return "SuperGrafx";
-    if (strcasecmp(label, "NEOGEO")  == 0 ||
-        strcasecmp(label, "NGP")     == 0) return "Neo Geo Pocket";
-    if (strcasecmp(label, "NGPC")    == 0) return "Neo Geo Pocket Color";
+    if (strcasecmp(label, "NEOGEO")  == 0) return "Neo Geo";
+    if (strcasecmp(label, "NEOCD")   == 0) return "Neo Geo CD";
+    if (strcasecmp(label, "NGP")     == 0 || strcasecmp(label, "NGPC") == 0)
+        return "Neo Geo Pocket / Color";
     if (strcasecmp(label, "LYNX")    == 0) return "Atari Lynx";
     if (strcasecmp(label, "JAGUAR")  == 0) return "Atari Jaguar";
-    if (strcasecmp(label, "2600")    == 0 ||
+    if (strcasecmp(label, "ATARI")   == 0 || strcasecmp(label, "2600") == 0 ||
         strcasecmp(label, "ATARI2600") == 0) return "Atari 2600";
-    if (strcasecmp(label, "WSWAN")   == 0) return "WonderSwan";
-    if (strcasecmp(label, "WSWANC")  == 0) return "WonderSwan Color";
+    if (strcasecmp(label, "WS")      == 0 || strcasecmp(label, "WSWAN") == 0 ||
+        strcasecmp(label, "WSWANC")  == 0) return "WonderSwan / Color";
     if (strcasecmp(label, "COLECO")  == 0) return "ColecoVision";
     if (strcasecmp(label, "VECTREX") == 0) return "Vectrex";
     if (strcasecmp(label, "ADVMAME") == 0) return "MAME";

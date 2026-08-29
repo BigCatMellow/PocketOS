@@ -18,57 +18,16 @@ import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 import urllib.request
 
+try:
+    from .onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
+except ImportError:  # Direct script and PyInstaller execution.
+    from onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
+
 # ── OpenVGDB download URL (latest release asset) ─────────────────────────────
 OPENVGDB_URL = "https://github.com/OpenVGDB/OpenVGDB/releases/download/v29.0/openvgdb.sqlite.zip"
 
-# ── System folder → OpenVGDB system name ─────────────────────────────────────
-SYSTEM_MAP = {
-    "FC": "Nintendo Entertainment System",
-    "NES": "Nintendo Entertainment System",
-    "SFC": "Nintendo Super Nintendo Entertainment System",
-    "SNES": "Nintendo Super Nintendo Entertainment System",
-    "N64": "Nintendo 64",
-    "GB": "Nintendo Game Boy",
-    "SGB": "Nintendo Game Boy",
-    "GBC": "Nintendo Game Boy Color",
-    "GBA": "Nintendo Game Boy Advance",
-    "NDS": "Nintendo DS",
-    "VBOY": "Nintendo Virtual Boy",
-    "MD": "Sega Genesis/Mega Drive",
-    "GEN": "Sega Genesis/Mega Drive",
-    "GENESIS": "Sega Genesis/Mega Drive",
-    "SMS": "Sega Master System",
-    "GG": "Sega Game Gear",
-    "SATURN": "Sega Saturn",
-    "SCD": "Sega CD/Mega-CD",
-    "32X": "Sega 32X",
-    "PS": "Sony PlayStation",
-    "PS1": "Sony PlayStation",
-    "PSX": "Sony PlayStation",
-    "PSP": "Sony PlayStation Portable",
-    "PCE": "NEC PC Engine/TurboGrafx-16",
-    "PCECD": "NEC PC Engine CD/TurboGrafx-CD",
-    "PCFX": "NEC PC-FX",
-    "SGFX": "NEC SuperGrafx",
-    "NEOGEO": "SNK Neo Geo Pocket",
-    "NGP": "SNK Neo Geo Pocket",
-    "NGPC": "SNK Neo Geo Pocket Color",
-    "LYNX": "Atari Lynx",
-    "JAGUAR": "Atari Jaguar",
-    "2600": "Atari 2600",
-    "ATARI2600": "Atari 2600",
-    "WSWAN": "Bandai WonderSwan",
-    "WSWANC": "Bandai WonderSwan Color",
-    "COLECO": "Coleco ColecoVision",
-    "VECTREX": "GCE Vectrex",
-}
-
-ROM_EXTS = {
-    ".zip", ".7z", ".nes", ".sfc", ".smc", ".gb", ".gbc", ".gba",
-    ".nds", ".n64", ".z64", ".v64", ".md", ".smd", ".gen", ".iso",
-    ".bin", ".cue", ".img", ".pbp", ".chd", ".pce", ".lnx", ".rom",
-    ".col", ".int", ".ws", ".wsc", ".ngp", ".ngc",
-}
+# ── Onion ROM/system contract ─────────────────────────────────────────────────
+ROM_EXTS = set(ROM_EXTENSIONS)
 
 # ── Manual genre overrides for common games not in OpenVGDB ──────────────────
 OVERRIDES = {
@@ -389,7 +348,7 @@ class App(tk.Tk):
         for folder in sorted(roms_dir.iterdir()):
             if not folder.is_dir():
                 continue
-            system_name = SYSTEM_MAP.get(folder.name.upper())
+            system_name = openvgdb_system_name(folder.name)
             if not system_name:
                 continue
 
@@ -413,7 +372,8 @@ class App(tk.Tk):
                     matched += 1
                     continue
 
-                result = db_lookup(conn, rom, system_name)
+                rom_system_name = openvgdb_system_name(folder.name, rom.suffix) or system_name
+                result = db_lookup(conn, rom, rom_system_name)
                 if result:
                     title, genre = result
                     games.append({"path": key, "name": title, "genre": genre})

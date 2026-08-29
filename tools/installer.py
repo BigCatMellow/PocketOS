@@ -22,6 +22,11 @@ try:
 except ImportError:  # Direct script and PyInstaller execution.
     from onion_runtime import BEGIN_MARKER, END_MARKER, install_runtime_hook, remove_runtime_hook
 
+try:
+    from .onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
+except ImportError:  # Direct script and PyInstaller execution.
+    from onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
+
 # ── Bundled assets path ───────────────────────────────────────────────────────
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys._MEIPASS) / "payload"
@@ -48,44 +53,9 @@ VERSION = "v1.2.5"
 
 # ── ROM import constants ──────────────────────────────────────────────────────
 
-EXT_TO_SYSTEMS = {
-    ".nes":  ["FC",  "NES"],      ".fds":  ["FC",  "NES"],
-    ".sfc":  ["SFC", "SNES"],     ".smc":  ["SFC", "SNES"],
-    ".gb":   ["GB",  "SGB"],      ".gbc":  ["GBC"],
-    ".gba":  ["GBA"],             ".n64":  ["N64"],
-    ".z64":  ["N64"],             ".v64":  ["N64"],
-    ".nds":  ["NDS"],             ".md":   ["MD",  "GEN", "GENESIS"],
-    ".smd":  ["MD",  "GEN", "GENESIS"],
-    ".gen":  ["MD",  "GEN", "GENESIS"],
-    ".sms":  ["SMS"],             ".gg":   ["GG"],
-    ".pce":  ["PCE"],             ".lnx":  ["LYNX"],
-    ".ws":   ["WSWAN"],           ".wsc":  ["WSWANC"],
-    ".ngp":  ["NGP"],             ".ngc":  ["NGPC"],
-    ".col":  ["COLECO"],          ".iso":  ["PS"],
-    ".bin":  ["PS"],              ".cue":  ["PS"],
-    ".pbp":  ["PS"],              ".chd":  ["PS"],
-    ".img":  ["PS"],
-}
-
-ROM_EXTS = set(EXT_TO_SYSTEMS.keys())
+ROM_EXTS = set(ROM_EXTENSIONS)
 
 DOC_NAMES = {"readme", "license", "changelog", "credits", "notes", "info", "manual"}
-
-SYSTEM_MAP = {
-    "FC": "Nintendo Entertainment System",       "NES": "Nintendo Entertainment System",
-    "SFC": "Nintendo Super Nintendo Entertainment System",
-    "SNES": "Nintendo Super Nintendo Entertainment System",
-    "GB": "Nintendo Game Boy",                   "SGB": "Nintendo Game Boy",
-    "GBC": "Nintendo Game Boy Color",            "GBA": "Nintendo Game Boy Advance",
-    "N64": "Nintendo 64",                        "NDS": "Nintendo DS",
-    "MD": "Sega Genesis/Mega Drive",             "GEN": "Sega Genesis/Mega Drive",
-    "GENESIS": "Sega Genesis/Mega Drive",        "SMS": "Sega Master System",
-    "GG": "Sega Game Gear",                      "PCE": "NEC PC Engine/TurboGrafx-16",
-    "LYNX": "Atari Lynx",                        "WSWAN": "Bandai WonderSwan",
-    "WSWANC": "Bandai WonderSwan Color",         "NGP": "SNK Neo Geo Pocket",
-    "NGPC": "SNK Neo Geo Pocket Color",          "COLECO": "Coleco ColecoVision",
-    "PS": "Sony PlayStation",
-}
 
 # ── Genre scan SQL ────────────────────────────────────────────────────────────
 
@@ -264,23 +234,16 @@ def _is_doc_file(name: str) -> bool:
     return stem in DOC_NAMES or any(stem.startswith(d) for d in DOC_NAMES)
 
 def detect_system(zip_path: Path):
-    AMBIGUOUS = {".bin", ".img", ".iso", ".chd"}
+    """Return a safe extension-derived Onion target; ambiguous formats are skipped."""
     try:
         with zipfile.ZipFile(zip_path) as zf:
-            names = [n for n in zf.namelist() if not n.endswith("/")]
-            best_ext, best_candidates = None, []
-            for name in names:
+            for name in (n for n in zf.namelist() if not n.endswith("/")):
                 if _is_doc_file(name):
                     continue
                 ext = Path(name).suffix.lower()
-                if ext not in EXT_TO_SYSTEMS:
-                    continue
-                candidates = EXT_TO_SYSTEMS[ext]
-                if ext not in AMBIGUOUS:
-                    return ext, candidates
-                if not best_ext:
-                    best_ext, best_candidates = ext, candidates
-            return best_ext, best_candidates
+                candidates = candidates_for_extension(ext)
+                if candidates:
+                    return ext, list(candidates)
     except Exception:
         pass
     return None, []
@@ -429,7 +392,7 @@ def _write_xml_atomic(tree: ET.ElementTree, dest: Path):
 def scan_genres_for_system(roms_root: Path, system_folder: str, db_path: Path, log) -> int:
     system_dir = roms_root / system_folder
     gamelist = system_dir / "miyoogamelist.xml"
-    system_name = SYSTEM_MAP.get(system_folder.upper())
+    system_name = openvgdb_system_name(system_folder)
     if not system_name:
         return 0
     try:
@@ -462,7 +425,8 @@ def scan_genres_for_system(roms_root: Path, system_folder: str, db_path: Path, l
             continue
         if rom.name in existing:
             continue
-        result = _db_lookup(db, rom, system_name)
+        rom_system_name = openvgdb_system_name(system_folder, rom.suffix) or system_name
+        result = _db_lookup(db, rom, rom_system_name)
         name, genre = result if result else (rom.stem, "Unsorted")
         el = ET.SubElement(root, "game")
         ET.SubElement(el, "path").text = "./" + rom.name
@@ -725,8 +689,9 @@ class Installer:
                     continue
                 dest_folder = find_system_folder(roms_root, candidates)
                 if dest_folder is None:
-                    dest_folder = roms_root / candidates[0]
-                    dest_folder.mkdir(parents=True, exist_ok=True)
+                    _warn(f"[{candidates[0]}] {zip_path.name} — Onion system folder is not installed; skipping")
+                    skipped += 1
+                    continue
                 _info(f"[{dest_folder.name}] {zip_path.name}")
                 new_files = extract_zip(zip_path, dest_folder, _log)
                 extracted_total += len(new_files)
