@@ -19,11 +19,25 @@ MANAGED_BLOCK = """\
     # POCKETOS_INTEGRATION_BEGIN
     cd "$miyoodir/app"
     pocketos_fail_flag=${POCKETOS_FAIL_FLAG:-/tmp/pocketos_failed}
+    pocketos_stress_seconds=""
+    if [ -f "$sysdir/pocketos_stress_test_seconds" ]; then
+        pocketos_stress_seconds=$(cat "$sysdir/pocketos_stress_test_seconds" 2> /dev/null)
+        rm -f "$sysdir/pocketos_stress_test_seconds"
+    fi
     if [ -x "$sysdir/bin/pocketOS" ] && [ ! -e "$pocketos_fail_flag" ]; then
-        PATH="$miyoodir/app:$PATH" \\
-            LD_LIBRARY_PATH="$miyoodir/lib:/config/lib:/lib" \\
-            LD_PRELOAD="$miyoodir/lib/libpadsp.so" \\
-            "$sysdir/bin/pocketOS"
+        if echo "$pocketos_stress_seconds" | grep -q '^[1-9][0-9]*$'; then
+            PATH="$miyoodir/app:$PATH" \\
+                LD_LIBRARY_PATH="$miyoodir/lib:/config/lib:/lib" \\
+                LD_PRELOAD="$miyoodir/lib/libpadsp.so" \\
+                POCKETOS_STRESS_TEST=1 \\
+                POCKETOS_STRESS_TEST_SECONDS="$pocketos_stress_seconds" \\
+                "$sysdir/bin/pocketOS"
+        else
+            PATH="$miyoodir/app:$PATH" \\
+                LD_LIBRARY_PATH="$miyoodir/lib:/config/lib:/lib" \\
+                LD_PRELOAD="$miyoodir/lib/libpadsp.so" \\
+                "$sysdir/bin/pocketOS"
+        fi
         pocketos_status=$?
         if [ "$pocketos_status" -ne 0 ]; then
             mkdir -p "$sysdir/logs"
