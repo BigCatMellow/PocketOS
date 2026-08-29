@@ -221,13 +221,13 @@ typedef struct {
 static ThemePalette theme_preview_original;
 static int theme_preview_active = 0;
 
-// Retro cream/navy palette — see pocket_os_design_guide.md
-static SDL_Color SC_TEXT  = { 13,  28,  51, 255};  // dark navy #0D1C33
-static SDL_Color SC_WHITE = {244, 247, 251, 255};  // soft white #F4F7FB (bar text)
-static SDL_Color SC_DIM     = { 95, 102, 128, 255};  // muted #5F6680
-static SDL_Color SC_SUB_SEL = {190, 195, 215, 255};  // muted white — subtitles on selection bg
-__attribute__((unused)) static SDL_Color SC_ARROW = {141, 126, 214, 255};  // lavender
-static SDL_Color SC_HDR   = { 13,  28,  51, 255};  // same as text for headers
+// Off-white/atomic purple palette — see pocket_os_design_guide.md
+static SDL_Color SC_TEXT  = { 37,  25,  52, 255};  // deep plum #251934
+static SDL_Color SC_WHITE = {255, 255, 255, 255};  // white text on purple selections
+static SDL_Color SC_DIM     = {102,  88, 112, 255};  // muted plum #665870
+static SDL_Color SC_SUB_SEL = {239, 227, 255, 255};  // pale lavender on selection bg
+__attribute__((unused)) static SDL_Color SC_ARROW = {125,  60, 255, 255};  // atomic purple
+static SDL_Color SC_HDR   = { 37,  25,  52, 255};  // same as text for headers
 
 // ── State machine ────────────────────────────────────────────────────────────
 
@@ -3571,7 +3571,7 @@ static void refresh_browser_palette(void) {
         browser_palette.text = color_luma(SC_TEXT) < 150 ? SC_TEXT : mix_color(SC_TEXT, black, 160);
         browser_palette.secondary = mix_color(browser_palette.text, bg, 92);
         browser_palette.dim = mix_color(browser_palette.text, bg, 145);
-        browser_palette.dark_text = mix_color(browser_palette.text, black, 40);
+        browser_palette.dark_text = SC_WHITE;
     } else {
         SDL_Color candidates[] = {bg, bar, card, SC_TEXT, SC_WHITE};
         SDL_Color darkest = candidates[0];
@@ -3599,9 +3599,9 @@ static void refresh_browser_palette(void) {
     browser_palette.is_light = is_light;
 
     const SDL_Color semantic[5] = {
-        {0xFF, 0xAD, 0x33, 0xFF}, {0x3E, 0xCF, 0x6E, 0xFF},
-        {0xA7, 0x8B, 0xFA, 0xFF}, {0xFF, 0x7A, 0x7A, 0xFF},
-        {0x7F, 0xB0, 0xFF, 0xFF}
+        {0x7D, 0x3C, 0xFF, 0xFF}, {0x8D, 0x5B, 0xFF, 0xFF},
+        {0x6D, 0x2B, 0xFF, 0xFF}, {0xA4, 0x7A, 0xFF, 0xFF},
+        {0x5C, 0x1F, 0xE0, 0xFF}
     };
     SDL_Color theme_accent = mapped_color(C_SEL_BORDER);
     for (int i = 0; i < 5; i++) {
@@ -3621,19 +3621,19 @@ static void refresh_browser_palette(void) {
 
 static SDL_Color browser_text(void) {
     return browser_palette_ready ? browser_palette.text
-                                 : (SDL_Color){0xE8, 0xE6, 0xDF, 0xFF};
+                                 : (SDL_Color){0x25, 0x19, 0x34, 0xFF};
 }
 static SDL_Color browser_secondary(void) {
     return browser_palette_ready ? browser_palette.secondary
-                                 : (SDL_Color){0x8A, 0x8D, 0x98, 0xFF};
+                                 : (SDL_Color){0x66, 0x58, 0x70, 0xFF};
 }
 static SDL_Color browser_dim(void) {
     return browser_palette_ready ? browser_palette.dim
-                                 : (SDL_Color){0x56, 0x5A, 0x64, 0xFF};
+                                 : (SDL_Color){0x7B, 0x6C, 0x80, 0xFF};
 }
 static SDL_Color browser_dark_text(void) {
     return browser_palette_ready ? browser_palette.dark_text
-                                 : (SDL_Color){0x0E, 0x0F, 0x13, 0xFF};
+                                 : (SDL_Color){0xFF, 0xFF, 0xFF, 0xFF};
 }
 
 static Uint32 browser_rgb(Uint8 r, Uint8 g, Uint8 b) {
@@ -3656,21 +3656,21 @@ static Uint32 browser_rgb(Uint8 r, Uint8 g, Uint8 b) {
 static Uint32 browser_accent(int category) {
     if (category < 0 || category > 4) category = 0;
     if (browser_palette_ready) return browser_palette.accent[category];
-    if (category == 1) return RGBA(0x3E, 0xCF, 0x6E);
-    if (category == 2) return RGBA(0xA7, 0x8B, 0xFA);
-    if (category == 3) return RGBA(0xFF, 0x7A, 0x7A);
-    if (category == 4) return RGBA(0x7F, 0xB0, 0xFF);
-    return RGBA(0xFF, 0xAD, 0x33);
+    if (category == 1) return RGBA(0x8D, 0x5B, 0xFF);
+    if (category == 2) return RGBA(0x6D, 0x2B, 0xFF);
+    if (category == 3) return RGBA(0xA4, 0x7A, 0xFF);
+    if (category == 4) return RGBA(0x5C, 0x1F, 0xE0);
+    return RGBA(0x7D, 0x3C, 0xFF);
 }
 
 static SDL_Color browser_accent_text(int category) {
     if (category < 0 || category > 4) category = 0;
     if (browser_palette_ready) return browser_palette.accent_text[category];
-    if (category == 1) return (SDL_Color){0x3E, 0xCF, 0x6E, 0xFF};
-    if (category == 2) return (SDL_Color){0xA7, 0x8B, 0xFA, 0xFF};
-    if (category == 3) return (SDL_Color){0xFF, 0x7A, 0x7A, 0xFF};
-    if (category == 4) return (SDL_Color){0x7F, 0xB0, 0xFF, 0xFF};
-    return (SDL_Color){0xFF, 0xAD, 0x33, 0xFF};
+    if (category == 1) return (SDL_Color){0x8D, 0x5B, 0xFF, 0xFF};
+    if (category == 2) return (SDL_Color){0x6D, 0x2B, 0xFF, 0xFF};
+    if (category == 3) return (SDL_Color){0xA4, 0x7A, 0xFF, 0xFF};
+    if (category == 4) return (SDL_Color){0x5C, 0x1F, 0xE0, 0xFF};
+    return (SDL_Color){0x7D, 0x3C, 0xFF, 0xFF};
 }
 
 static Uint32 browser_accent_tint(int category) {
@@ -5909,18 +5909,18 @@ int main(int argc, char *argv[]) {
     }
     log_msg("fonts loaded OK");
 
-    // Resolve palette defaults — retro cream/navy/lavender per design guide
-    C_BG          = RGBA(0xF1, 0xEB, 0xDD);
-    C_BAR         = RGBA(0x07, 0x1A, 0x33);
-    C_SEP         = RGBA(0xD2, 0xCE, 0xC3);
-    C_SEL         = RGBA(0xC4, 0xB9, 0xEF);
-    C_SEL_HI      = RGBA(0xE2, 0xDD, 0xFA);
-    C_SEL_BORDER  = RGBA(0x8D, 0x7E, 0xD6);
-    C_PANEL_HDR   = RGBA(0xD6, 0xCF, 0xEE);
-    C_PANEL_HI    = RGBA(0xE8, 0xE3, 0xF6);
-    C_DIVIDER     = RGBA(0xA9, 0x9E, 0xDE);
-    C_CARD        = RGBA(0xF8, 0xF1, 0xE6);
-    C_CARD_BORDER = RGBA(0xD2, 0xCE, 0xC3);
+    // Resolve palette defaults — off-white surfaces with atomic purple accents
+    C_BG          = RGBA(0xF8, 0xF1, 0xE6);
+    C_BAR         = RGBA(0xFF, 0xFD, 0xF8);
+    C_SEP         = RGBA(0xE4, 0xD8, 0xC7);
+    C_SEL         = RGBA(0x7D, 0x3C, 0xFF);
+    C_SEL_HI      = RGBA(0x9B, 0x6B, 0xFF);
+    C_SEL_BORDER  = RGBA(0x5C, 0x1F, 0xE0);
+    C_PANEL_HDR   = RGBA(0xEF, 0xE3, 0xD4);
+    C_PANEL_HI    = RGBA(0xF4, 0xEA, 0xDB);
+    C_DIVIDER     = RGBA(0xD5, 0xC5, 0xB0);
+    C_CARD        = RGBA(0xFF, 0xFC, 0xF6);
+    C_CARD_BORDER = RGBA(0xE6, 0xD8, 0xC3);
 
     // Apply theme color overrides (second pass — defaults are now set)
     load_theme(NULL, 0);

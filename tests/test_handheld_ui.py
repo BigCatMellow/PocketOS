@@ -24,9 +24,10 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("k == BTN_R2", self.source)
 
     def test_primary_views_use_fixed_low_cost_palette(self):
-        for color in ("0x0E, 0x0F, 0x13", "0xFF, 0xAD, 0x33", "0x3E, 0xCF, 0x6E",
-                      "0xA7, 0x8B, 0xFA", "0xFF, 0x7A, 0x7A", "0x7F, 0xB0, 0xFF"):
+        for color in ("0xF8, 0xF1, 0xE6", "0xFF, 0xFD, 0xF8", "0x25, 0x19, 0x34",
+                      "0x7D, 0x3C, 0xFF", "0x9B, 0x6B, 0xFF", "0x5C, 0x1F, 0xE0"):
             self.assertIn(color, self.source)
+        self.assertIn("browser_palette.dark_text = SC_WHITE", self.source)
         primary_shell = self.source[
             self.source.index("draw_most_played_shell"):
             self.source.index("__attribute__((unused)) static void draw_browse")
@@ -49,7 +50,7 @@ class HandheldUiContractTests(unittest.TestCase):
             self.assertIn(f'return "{compact}";', self.source)
         self.assertIn('strcasecmp(label, "MD")      == 0) return "Genesis"', self.source)
 
-    def test_secondary_views_share_the_dark_pocketos_frame(self):
+    def test_secondary_views_share_the_light_pocketos_frame(self):
         for function in (
             "draw_apps", "draw_settings", "draw_font_picker", "draw_theme_picker",
             "draw_info_panel", "draw_game_options", "draw_entry_list",
@@ -87,6 +88,10 @@ class HandheldUiContractTests(unittest.TestCase):
         theme = (ROOT / "assets" / "res" / "pocketos" / "theme_onion.json").read_text(
             encoding="utf-8"
         )
+        self.assertIn("C_BG          = RGBA(0xF8, 0xF1, 0xE6)", self.source)
+        self.assertIn("C_BAR         = RGBA(0xFF, 0xFD, 0xF8)", self.source)
+        self.assertIn("C_SEL         = RGBA(0x7D, 0x3C, 0xFF)", self.source)
+        self.assertNotIn("C_BAR         = RGBA(0x07, 0x1A, 0x33)", self.source)
         self.assertIn('"bg":            "#F8F1E6"', theme)
         self.assertIn('"bar":           "#FFFDF8"', theme)
         self.assertIn('"sel":           "#7D3CFF"', theme)
