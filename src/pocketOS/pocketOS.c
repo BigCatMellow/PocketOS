@@ -3612,14 +3612,18 @@ static void refresh_browser_palette(void) {
     browser_palette.muted = mapped_pixel(muted);
     browser_palette.is_light = is_light;
 
+    SDL_Color theme_sel = mapped_color(C_SEL);
+    SDL_Color theme_hi = mapped_color(C_SEL_HI);
+    SDL_Color theme_border = mapped_color(C_SEL_BORDER);
     const SDL_Color semantic[5] = {
-        {0x7D, 0x3C, 0xFF, 0xFF}, {0x8D, 0x5B, 0xFF, 0xFF},
-        {0x6D, 0x2B, 0xFF, 0xFF}, {0xA4, 0x7A, 0xFF, 0xFF},
-        {0x5C, 0x1F, 0xE0, 0xFF}
+        theme_sel,
+        mix_color(theme_sel, theme_hi, 112),
+        theme_hi,
+        mix_color(theme_sel, theme_border, 120),
+        theme_border
     };
-    SDL_Color theme_accent = mapped_color(C_SEL_BORDER);
     for (int i = 0; i < 5; i++) {
-        SDL_Color accent = mix_color(semantic[i], theme_accent, is_light ? 136 : 104);
+        SDL_Color accent = semantic[i];
         if (is_light) {
             for (int step = 0; step < 5 && color_luma(accent) > 132; step++)
                 accent = mix_color(accent, black, 34);

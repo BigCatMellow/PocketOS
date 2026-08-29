@@ -1,5 +1,6 @@
 import unittest
 import json
+import colorsys
 from pathlib import Path
 
 
@@ -76,7 +77,8 @@ class HandheldUiContractTests(unittest.TestCase):
 
     def test_legacy_themes_feed_the_redesigned_palette(self):
         self.assertIn("static void refresh_browser_palette(void)", self.source)
-        self.assertIn("theme_accent = mapped_color(C_SEL_BORDER)", self.source)
+        self.assertIn("theme_sel = mapped_color(C_SEL)", self.source)
+        self.assertIn("mix_color(theme_sel, theme_border, 120)", self.source)
         self.assertIn("theme_pick_sel = current_theme_index()", self.source)
         self.assertIn('"Appearance"', self.source)
         self.assertIn('"pocketosAppearance"', self.source)
@@ -118,7 +120,6 @@ class HandheldUiContractTests(unittest.TestCase):
             bg = data["bg"].lstrip("#")
             r, g, b = (int(bg[i:i + 2], 16) for i in (0, 2, 4))
             self.assertGreaterEqual((299 * r + 587 * g + 114 * b) // 1000, 235)
-            self.assertTrue(data["sel"].startswith(("#6", "#7", "#8")))
         self.assertEqual("#7D3CFF", json.loads((theme_dir / "theme_onion.json").read_text())["sel"])
         self.assertEqual("#7834F8", json.loads((theme_dir / "theme_ink.json").read_text())["sel"])
         self.assertEqual("#6F2DFF", json.loads((theme_dir / "theme_snow.json").read_text())["sel"])
@@ -139,6 +140,21 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn('write_config_int("pocketosAppearance", !dark)', self.source)
         self.assertIn('snprintf(out, outlen, "%s", dark ? "Dark" : "Light")', self.source)
         self.assertIn("C_BG          = mapped_pixel(mix_color(base, accent_border, 18))", self.source)
+
+    def test_theme_accents_have_visible_range(self):
+        theme_dir = ROOT / "assets" / "res" / "pocketos"
+        hues = []
+        accents = set()
+        for path in sorted(theme_dir.glob("theme_*.json")):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            color = data["sel"].lstrip("#")
+            r, g, b = (int(color[i:i + 2], 16) for i in (0, 2, 4))
+            hue, saturation, _value = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+            hues.append(int(hue * 12))
+            accents.add(data["sel"])
+            self.assertGreaterEqual(saturation, 0.35, f"{path.name} accent is too gray")
+        self.assertGreaterEqual(len(accents), 24)
+        self.assertGreaterEqual(len(set(hues)), 8)
 
     def test_device_info_uses_onion_runtime_version_sources(self):
         self.assertIn('/.tmp_update/onionVersion/version.txt', self.source)
