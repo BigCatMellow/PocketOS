@@ -156,6 +156,12 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn('snprintf(out, outlen, "%s", dark ? "Dark" : "Light")', self.source)
         self.assertIn("C_BG          = mapped_pixel(mix_color(base, accent_border, 18))", self.source)
 
+    def test_right_dpad_never_launches_a_game(self):
+        self.assertNotIn("k == BTN_A || k == BTN_RIGHT) launch_entry", self.source)
+        self.assertIn("if (k == BTN_A) launch_entry(&entries[*sel]);", self.source)
+        self.assertIn("if (k == BTN_A) launch_entry(entry);", self.source)
+        self.assertIn("if (k == BTN_A) launch_entry(&entry);", self.source)
+
     def test_theme_accents_have_visible_range(self):
         theme_dir = ROOT / "assets" / "res" / "pocketos"
         hues = []

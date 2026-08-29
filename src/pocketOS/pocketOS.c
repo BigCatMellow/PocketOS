@@ -4358,7 +4358,7 @@ static void on_browse_games_key(SDLKey k) {
     if (browse_game_sel < browse_game_off) browse_game_off = browse_game_sel;
     if (browse_game_sel >= browse_game_off + GAME_ROWS)  browse_game_off = browse_game_sel - GAME_ROWS + 1;
     if (browse_game_sel != before) play_move();
-    if (k == BTN_A || k == BTN_RIGHT) {
+    if (k == BTN_A) {
         PlayEntry entry;
         if (selected_browse_entry(&entry)) launch_entry(&entry);
     }
@@ -5093,7 +5093,7 @@ static void on_entry_key(SDLKey k, PlayEntry *entries, int count, int *sel,
     if (k == BTN_L1) *sel = (*sel - GAME_ROWS < 0) ? 0 : *sel - GAME_ROWS;
     if (k == BTN_R1) *sel = (*sel + GAME_ROWS >= count) ? count - 1 : *sel + GAME_ROWS;
     if (*sel != before) play_move();
-    if (k == BTN_A || k == BTN_RIGHT) launch_entry(&entries[*sel]);
+    if (k == BTN_A) launch_entry(&entries[*sel]);
     if (k == BTN_X) {
         PlayEntry *e = &entries[*sel];
         enter_game_options(e->label, e->rompath, e->launch, e->system, back_state);
@@ -5122,7 +5122,7 @@ static void on_most_played_key(SDLKey k) {
     if (most_played_sel != before) play_move();
 
     PlayEntry *entry = &most_played_entries[most_played_sel];
-    if (k == BTN_A || k == BTN_RIGHT) launch_entry(entry);
+    if (k == BTN_A) launch_entry(entry);
     if (k == BTN_Y) {
         toggle_favorite(entry->label, entry->rompath, entry->launch);
         play_select();
@@ -5149,7 +5149,7 @@ static void on_favorites_key(SDLKey k) {
     if (favorite_sel != before) play_move();
 
     PlayEntry entry = favorite_entries[favorite_sel];
-    if (k == BTN_A || k == BTN_RIGHT) launch_entry(&entry);
+    if (k == BTN_A) launch_entry(&entry);
     if (k == BTN_Y) {
         toggle_favorite(entry.label, entry.rompath, entry.launch);
         play_select();
