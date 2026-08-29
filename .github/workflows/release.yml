@@ -90,6 +90,7 @@ jobs:
           cp -r assets/res/pocketos staging/.tmp_update/res/pocketos
           cp tools/install_runtime.py staging/install-pocketos.py
           cp tools/onion_runtime.py staging/onion_runtime.py
+          cp tools/pocketos_health_report.py staging/pocketos-health-report.py
           cp README.md staging/README.md
           (cd staging && find . -type f ! -name manifest.sha256 -print0 \
             | LC_ALL=C sort -z \
@@ -171,6 +172,7 @@ jobs:
           mkdir -p payload/.tmp_update/res
           cp dist/bin/pocketOS payload/.tmp_update/bin/pocketOS
           cp -r assets/res/pocketos payload/.tmp_update/res/pocketos
+          cp tools/pocketos_health_report.py payload/pocketos-health-report.py
 
       - name: Prepare payload (Windows)
         if: matrix.label == 'windows'
@@ -180,6 +182,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "payload/.tmp_update/res"
           Copy-Item "dist/bin/pocketOS" "payload/.tmp_update/bin/pocketOS"
           Copy-Item -Recurse "assets/res/pocketos" "payload/.tmp_update/res/pocketos"
+          Copy-Item "tools/pocketos_health_report.py" "payload/pocketos-health-report.py"
 
       - name: Build installer
         run: >

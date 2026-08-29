@@ -125,6 +125,7 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #endif
 #ifndef LOG_PATH
 #define LOG_PATH    SYSDIR "/logs/pocketos_debug.log"
+#define HEALTH_LOG_PATH SYSDIR "/logs/pocketos_health.csv"
 #endif
 #ifndef FIRMWARE_VERSION_PATH
 #define FIRMWARE_VERSION_PATH "/tmp/firmwareVersion"
@@ -140,7 +141,7 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #ifndef FONT_PRIMARY
 #define FONT_PRIMARY POCKETOS_ROOT "/miyoo/app/BPreplayBold.otf"
 #endif
-#define POCKETOS_VERSION "1.2.1"
+#define POCKETOS_VERSION "1.2.2"
 #define ONION_BASE_VERSION "v4.3.1-1"
 
 // ── Button mappings (from Onion keymap_sw.h) ─────────────────────────────────
@@ -1168,6 +1169,7 @@ static int cmp_play_entry(const void *a, const void *b) {
 // write so the last line in the file is always the last thing that ran.
 
 #define LOG_MAX_BYTES (512 * 1024)   /* rotate when log exceeds 512 KB */
+#define HEALTH_LOG_MAX_BYTES (512 * 1024)
 
 static FILE *g_log_fp = NULL;
 
@@ -1337,6 +1339,48 @@ static void log_state_if_changed(int cur) {
             state_name(cur));
     fflush(g_log_fp);
     g_prev_state = cur;
+}
+
+/* ── Opt-in health monitor ──────────────────────────────────────────────────
+ * Enable by creating HEALTH_LOG_PATH.  The monitor records only launcher
+ * health data (never ROM names or other library data), once per minute plus
+ * launch/exit.  A bounded CSV keeps SD-card writes and storage use small. */
+static long proc_kb_value(const char *path, const char *label) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char key[64];
+    long value;
+    while (fscanf(f, "%63s %ld", key, &value) == 2) {
+        if (strcmp(key, label) == 0) {
+            fclose(f);
+            return value;
+        }
+    }
+    fclose(f);
+    return -1;
+}
+
+static void health_log_sample(const char *event) {
+    struct stat st;
+    if (stat(HEALTH_LOG_PATH, &st) != 0) return;  /* monitoring is opt-in */
+
+    int write_header = st.st_size == 0;
+    if (st.st_size > HEALTH_LOG_MAX_BYTES) {
+        char previous[512];
+        snprintf(previous, sizeof(previous), "%s.prev", HEALTH_LOG_PATH);
+        rename(HEALTH_LOG_PATH, previous);
+        write_header = 1;
+    }
+
+    FILE *f = fopen(HEALTH_LOG_PATH, "a");
+    if (!f) return;
+    if (write_header)
+        fputs("timestamp,event,screen,rss_kb,mem_available_kb,battery_percent,brightness\n", f);
+    fprintf(f, "%ld,%s,%s,%ld,%ld,%d,%d\n", (long)time(NULL), event,
+            state_name(state), proc_kb_value("/proc/self/status", "VmRSS:"),
+            proc_kb_value("/proc/meminfo", "MemAvailable:"), read_battery(),
+            json_int_file(POCKETOS_ROOT "/system.json", "brightness", -1));
+    fclose(f);
 }
 
 static void fill_rect(int x, int y, int w, int h, Uint32 color);
@@ -6080,6 +6124,7 @@ int main(int argc, char *argv[]) {
     }
 
     g_last_input = time(NULL);  /* start idle timer from launch, not epoch */
+    health_log_sample("launch");
 
     SDL_Event ev;
     while (running) {
@@ -6147,6 +6192,7 @@ int main(int argc, char *argv[]) {
             if (tm->tm_min != g_last_clock_min) {
                 g_last_clock_min = tm->tm_min;
                 g_dirty = 1;
+                health_log_sample("minute");
 
                 /* Battery change detection (cached, so cheap) */
                 int batt = read_battery();
@@ -6180,6 +6226,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    health_log_sample("exit");
     clear_text_cache();
     TTF_CloseFont(font_body);
     TTF_CloseFont(font_game);

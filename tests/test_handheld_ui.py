@@ -35,8 +35,8 @@ class HandheldUiContractTests(unittest.TestCase):
         ]
         self.assertNotIn("SDL_SetAlpha", primary_shell)
 
-    def test_release_version_is_1_2_1(self):
-        self.assertIn('#define POCKETOS_VERSION "1.2.1"', self.source)
+    def test_release_version_is_1_2_2(self):
+        self.assertIn('#define POCKETOS_VERSION "1.2.2"', self.source)
 
     def test_library_system_rows_do_not_repeat_names_in_badges(self):
         library = self.source[
@@ -161,6 +161,12 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("if (k == BTN_A) launch_entry(&entries[*sel]);", self.source)
         self.assertIn("if (k == BTN_A) launch_entry(entry);", self.source)
         self.assertIn("if (k == BTN_A) launch_entry(&entry);", self.source)
+
+    def test_health_monitor_is_opt_in_and_bounded(self):
+        self.assertIn('#define HEALTH_LOG_PATH SYSDIR "/logs/pocketos_health.csv"', self.source)
+        self.assertIn("if (stat(HEALTH_LOG_PATH, &st) != 0) return", self.source)
+        self.assertIn("#define HEALTH_LOG_MAX_BYTES (512 * 1024)", self.source)
+        self.assertIn('health_log_sample("minute");', self.source)
 
     def test_theme_accents_have_visible_range(self):
         theme_dir = ROOT / "assets" / "res" / "pocketos"

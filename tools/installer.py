@@ -33,13 +33,14 @@ else:
 
 PAYLOAD_BIN = BASE_DIR / ".tmp_update" / "bin" / "pocketOS"
 PAYLOAD_RES = BASE_DIR / ".tmp_update" / "res" / "pocketos"
+PAYLOAD_HEALTH_REPORT = BASE_DIR / "pocketos-health-report.py"
 RUNTIME_REL = Path(".tmp_update") / "runtime.sh"
 
 ONION_URL   = "https://github.com/OnionUI/Onion/releases/latest"
 GITHUB_API  = "https://api.github.com/repos/BigCatMellow/PocketOS/releases/latest"
 GITHUB_REPO = "https://github.com/BigCatMellow/PocketOS/releases/latest"
 
-VERSION = "v1.2.1"
+VERSION = "v1.2.2"
 
 
 # ── ROM import constants ──────────────────────────────────────────────────────
@@ -201,6 +202,7 @@ def install_from_dir(src: Path, sd: Path, log):
     res_src  = src / ".tmp_update" / "res" / "pocketos"
     bin_dest = sd  / ".tmp_update" / "bin"
     res_dest = sd  / ".tmp_update" / "res" / "pocketos"
+    report_dest = sd / "pocketos-health-report.py"
     if not bin_src.exists():
         raise FileNotFoundError(f"Binary not found: {bin_src}")
     if not res_src.is_dir():
@@ -209,6 +211,8 @@ def install_from_dir(src: Path, sd: Path, log):
     bin_dest.mkdir(parents=True, exist_ok=True)
     log("  Copying themes, icons, and fonts...")
     _replace_tree(res_src, res_dest, preserve=(Path("theme.json"),))
+    if PAYLOAD_HEALTH_REPORT.is_file():
+        _copy_file_atomic(PAYLOAD_HEALTH_REPORT, report_dest)
     log("  Copying PocketOS launcher...")
     _copy_file_atomic(bin_src, bin_dest / "pocketOS")
     (bin_dest / "pocketOS").chmod(0o755)

@@ -13,7 +13,7 @@ class EnvironmentContractTests(unittest.TestCase):
     def test_environment_spec_profiles_are_present(self):
         spec = load_spec(ROOT / "pocketos" / "environment.json")
         self.assertEqual("pocketos-release", spec["environment_id"])
-        self.assertEqual("1.2.1", spec["project"]["pocketos_version"])
+        self.assertEqual("1.2.2", spec["project"]["pocketos_version"])
         self.assertIn("@sha256:", spec["toolchain"]["miyoo_mini"])
         for profile in ("ci-arm", "ci-zip", "host-render"):
             self.assertIn(profile, spec["profiles"])
