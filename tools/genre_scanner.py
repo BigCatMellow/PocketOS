@@ -19,9 +19,19 @@ from tkinter import ttk, filedialog, scrolledtext, messagebox
 import urllib.request
 
 try:
-    from .onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
+    from .onion_systems import ROM_EXTENSIONS, openvgdb_system_name
+    from .genre_overrides import load_overrides as load_genre_overrides
+    from .rom_safety import (
+        GamelistError, crc32_of, extract_zip_roms, index_games,
+        load_gamelist_tree, write_xml_atomic,
+    )
 except ImportError:  # Direct script and PyInstaller execution.
-    from onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
+    from onion_systems import ROM_EXTENSIONS, openvgdb_system_name
+    from genre_overrides import load_overrides as load_genre_overrides
+    from rom_safety import (
+        GamelistError, crc32_of, extract_zip_roms, index_games,
+        load_gamelist_tree, write_xml_atomic,
+    )
 
 # ── OpenVGDB download URL (latest release asset) ─────────────────────────────
 OPENVGDB_URL = "https://github.com/OpenVGDB/OpenVGDB/releases/download/v29.0/openvgdb.sqlite.zip"
@@ -29,40 +39,8 @@ OPENVGDB_URL = "https://github.com/OpenVGDB/OpenVGDB/releases/download/v29.0/ope
 # ── Onion ROM/system contract ─────────────────────────────────────────────────
 ROM_EXTS = set(ROM_EXTENSIONS)
 
-# ── Manual genre overrides for common games not in OpenVGDB ──────────────────
-OVERRIDES = {
-    "Adventures of Lolo": "Puzzle",
-    "Adventures of Lolo 3": "Puzzle",
-    "Kirby's Adventure": "Platformer",
-    "Mighty Final Fight": "Beat 'em Up",
-    "Ninja Gaiden": "Action",
-    "Ninja Gaiden II - The Dark Sword of Chaos (USA)": "Action",
-    "Nintendo World Cup": "Sports",
-    "Super Dodge Ball": "Sports",
-    "Super Mario Bros": "Platformer",
-    "Super Mario Bros. 2": "Platformer",
-    "Super Mario Bros. 3": "Platformer",
-    "The Legend of Zelda": "Action/Adventure",
-    "Cave Noire": "RPG",
-    "Daedalian Opus": "Puzzle",
-    "Donkey Kong": "Platformer",
-    "Kwirk: He's A-maze-ing!": "Puzzle",
-    "Mole Mania (USA) (SGB Enhanced)": "Puzzle",
-    "Noobow": "Puzzle",
-    "Pokemon: Blue Version": "RPG",
-    "Advance Wars 2 - Black Hole Rising": "Strategy",
-    "Castlevania - Circle of the Moon": "Platformer",
-    "Mother 3 (Tr)": "RPG",
-    "Castlevania - Symphony of the Night": "Platformer",
-    "Suikoden II": "RPG",
-    "Chrono Trigger": "RPG",
-    "EarthBound": "RPG",
-    "Secret of Mana": "Action RPG",
-    "Super Metroid": "Platformer",
-    "The Legend of Zelda: Link's Awakening DX": "Action/Adventure",
-    "The Legend of Zelda: Oracle of Ages": "Action/Adventure",
-    "The Legend of Zelda: Oracle of Seasons": "Action/Adventure",
-}
+# ── Manual genre overrides are data, never executable code ────────────────────
+OVERRIDES = load_genre_overrides()
 
 # ── Database queries ──────────────────────────────────────────────────────────
 QUERY_CRC = """
@@ -85,22 +63,6 @@ QUERY_FILENAME = """
 """
 
 
-def crc32_of(path: Path) -> str:
-    try:
-        if path.suffix.lower() == ".zip":
-            with zipfile.ZipFile(path) as zf:
-                names = zf.namelist()
-                if not names:
-                    return ""
-                data = zf.read(names[0])
-        else:
-            with open(path, "rb") as f:
-                data = f.read(64 * 1024 * 1024)
-        return f"{zlib.crc32(data) & 0xFFFFFFFF:08X}"
-    except Exception:
-        return ""
-
-
 def db_lookup(db, rom: Path, system_name: str):
     crc = crc32_of(rom)
     if crc:
@@ -113,40 +75,10 @@ def db_lookup(db, rom: Path, system_name: str):
     return None
 
 
-def load_existing(gamelist: Path) -> dict:
-    result = {}
-    if not gamelist.exists():
-        return result
-    try:
-        tree = ET.parse(gamelist)
-        for el in tree.getroot().findall("game"):
-            path = (el.findtext("path") or "").lstrip("./")
-            result[path] = {
-                "path": path,
-                "name": el.findtext("name") or path,
-                "genre": el.findtext("genre") or "Unsorted",
-            }
-    except Exception:
-        pass
-    return result
-
-
-def write_gamelist(games: list, dest: Path):
-    root = ET.Element("gameList")
-    for g in sorted(games, key=lambda x: x["name"].lower()):
-        el = ET.SubElement(root, "game")
-        ET.SubElement(el, "path").text = "./" + g["path"]
-        ET.SubElement(el, "name").text = g["name"]
-        ET.SubElement(el, "genre").text = g["genre"]
-    raw = ET.tostring(root, encoding="unicode")
-    pretty = minidom.parseString(raw).toprettyxml(indent="  ", encoding=None)
-    dest.write_text(pretty, encoding="utf-8")
-
-
 def apply_overrides(xml_path: Path) -> int:
     try:
-        tree = ET.parse(xml_path)
-    except Exception:
+        tree = load_gamelist_tree(xml_path)
+    except GamelistError:
         return 0
     root = tree.getroot()
     changed = 0
@@ -159,9 +91,7 @@ def apply_overrides(xml_path: Path) -> int:
             genre_el.text = OVERRIDES[name]
             changed += 1
     if changed:
-        raw = ET.tostring(root, encoding="unicode")
-        pretty = minidom.parseString(raw).toprettyxml(indent="  ", encoding=None)
-        xml_path.write_text(pretty, encoding="utf-8")
+        write_xml_atomic(tree, xml_path)
     return changed
 
 
@@ -286,25 +216,30 @@ class App(tk.Tk):
         self._scan_btn.config(state="disabled")
 
         def _do():
+            def set_status(message):
+                self.after(0, lambda m=message: self._status.config(text=m))
             try:
-                urllib.request.urlretrieve(OPENVGDB_URL, dest,
-                    reporthook=lambda b, bs, t: self._status.config(
-                        text=f"Downloading... {min(b*bs, t) // 1024 // 1024} / {t // 1024 // 1024} MB"))
-                import zipfile as zf
+                def reporthook(blocks, block_size, total):
+                    downloaded = min(blocks * block_size, total) if total > 0 else blocks * block_size
+                    total_mb = total // 1024 // 1024 if total > 0 else 0
+                    set_status(f"Downloading... {downloaded // 1024 // 1024} / {total_mb} MB")
+                urllib.request.urlretrieve(OPENVGDB_URL, dest, reporthook=reporthook)
                 self._log_line(f"Extracting {dest}...")
-                out_dir = str(Path(dest).parent)
-                with zf.ZipFile(dest, 'r') as z:
-                    z.extractall(out_dir)
-                sqlite_path = str(Path(out_dir) / "openvgdb.sqlite")
-                self._db_path.set(sqlite_path)
+                out_dir = Path(dest).parent
+                extracted = extract_zip_roms(Path(dest), out_dir, {".sqlite"}, self._log_line)
+                sqlite_files = [path for path in extracted if path.name == "openvgdb.sqlite"]
+                sqlite_path = sqlite_files[0] if sqlite_files else out_dir / "openvgdb.sqlite"
+                if not sqlite_path.is_file():
+                    raise RuntimeError("download archive did not contain openvgdb.sqlite")
+                self.after(0, lambda p=str(sqlite_path): self._db_path.set(p))
                 self._log_line(f"Database saved to: {sqlite_path}")
-                self._status.config(text="Download complete.")
+                set_status("Download complete.")
             except Exception as e:
                 self._log_line(f"Download failed: {e}")
-                self._status.config(text="Download failed.")
+                set_status("Download failed.")
             finally:
-                self._progress.stop()
-                self._scan_btn.config(state="normal")
+                self.after(0, self._progress.stop)
+                self.after(0, lambda: self._scan_btn.config(state="normal"))
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -361,14 +296,20 @@ class App(tk.Tk):
             self.after(0, lambda n=folder.name: self._status.config(text=f"Scanning {n}..."))
 
             gamelist_path = folder / "miyoogamelist.xml"
-            existing = load_existing(gamelist_path)
-            games = []
+            try:
+                tree = load_gamelist_tree(gamelist_path)
+            except GamelistError as exc:
+                self._log_line(f"  ERROR: {exc}")
+                skipped += len(roms)
+                continue
+            root = tree.getroot()
+            existing = index_games(root)
 
             for rom in roms:
                 key = rom.name
                 total_roms += 1
-                if key in existing and existing[key]["genre"] != "Unsorted":
-                    games.append(existing[key])
+                game = existing.get(key)
+                if game is not None and (game.findtext("genre") or "Unsorted") != "Unsorted":
                     matched += 1
                     continue
 
@@ -376,16 +317,31 @@ class App(tk.Tk):
                 result = db_lookup(conn, rom, rom_system_name)
                 if result:
                     title, genre = result
-                    games.append({"path": key, "name": title, "genre": genre})
-                    self._log_line(f"  ✓  {key[:50]:<50} → {genre}")
                     matched += 1
+                    self._log_line(f"  ✓  {key[:50]:<50} → {genre}")
                 else:
-                    name = existing[key]["name"] if key in existing else rom.stem
-                    games.append({"path": key, "name": name, "genre": "Unsorted"})
-                    self._log_line(f"  ✗  {key[:50]:<50} → Unsorted")
+                    title = (game.findtext("name") if game is not None else None) or rom.stem
+                    genre = "Unsorted"
                     unsorted += 1
+                    self._log_line(f"  ✗  {key[:50]:<50} → Unsorted")
 
-            write_gamelist(games, gamelist_path)
+                if game is None:
+                    game = ET.SubElement(root, "game")
+                    ET.SubElement(game, "path").text = "./" + key
+                    ET.SubElement(game, "name").text = title
+                    ET.SubElement(game, "genre").text = genre
+                    existing[key] = game
+                else:
+                    name_el = game.find("name")
+                    if name_el is None:
+                        name_el = ET.SubElement(game, "name")
+                    name_el.text = title
+                    genre_el = game.find("genre")
+                    if genre_el is None:
+                        genre_el = ET.SubElement(game, "genre")
+                    genre_el.text = genre
+
+            write_xml_atomic(tree, gamelist_path)
 
         # Apply manual overrides
         self._log_line("\nApplying manual genre fixes...")

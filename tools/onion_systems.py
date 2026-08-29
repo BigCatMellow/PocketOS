@@ -171,6 +171,17 @@ def candidates_for_extension(ext: str) -> tuple[str, ...]:
     return (folder,) if folder else ()
 
 
+def extensions_for_folder(folder: str) -> frozenset[str]:
+    """ROM extensions valid for an explicit/installed target folder."""
+    canonical = canonical_folder(folder)
+    info = SYSTEMS.get(canonical)
+    if info:
+        return frozenset(info["extensions"])
+    if canonical == "N64":
+        return frozenset({".n64", ".z64", ".v64"})
+    return frozenset()
+
+
 def openvgdb_system_name(folder: str, rom_suffix: str | None = None) -> str | None:
     """Return OpenVGDB system name, retaining safe legacy scan compatibility."""
     canonical = canonical_folder(folder)

@@ -17,7 +17,9 @@ Final proof: PR CI + ARM build + adversarial data-integrity tests + independent 
 - [x] Consolidate canonical Onion system/folder mappings.
 - [ ] Redesign ambiguous/CD/arcade ZIP importing.
 - [ ] Replace executable Python overrides with data-only overrides.
-- [ ] Stream ZIP extraction with size/free-space/collision limits.
+- [x] Stream ZIP extraction with size/free-space/collision limits.
 - [ ] Add transactional install/uninstall recovery tests.
 - [ ] Run real-device stress validation.
 - [ ] Split launcher modules only after behavior is locked by tests.
+
+- [x] Harden standalone importer/scanner metadata writes.

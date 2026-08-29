@@ -27,6 +27,11 @@ try:
 except ImportError:  # Direct script and PyInstaller execution.
     from onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
 
+try:
+    from .genre_overrides import load_overrides as load_genre_overrides
+except ImportError:  # Direct script and PyInstaller execution.
+    from genre_overrides import load_overrides as load_genre_overrides
+
 # ── Bundled assets path ───────────────────────────────────────────────────────
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys._MEIPASS) / "payload"
@@ -469,12 +474,7 @@ def _asset_dir() -> Path:
     return Path(__file__).parent
 
 def _load_overrides() -> dict:
-    fix_path = _asset_dir() / "fix_unsorted.py"
-    if not fix_path.exists():
-        return {}
-    ns = {}
-    exec(fix_path.read_text(), ns)
-    return ns.get("OVERRIDES", {})
+    return load_genre_overrides()
 
 def _find_db() -> Path | None:
     p = _asset_dir() / "openvgdb.sqlite"
