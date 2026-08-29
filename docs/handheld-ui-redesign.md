@@ -1,6 +1,6 @@
 # Handheld UI Redesign
 
-PocketOS 1.2.0 implements the latest five-row direction from the local design
+PocketOS 1.2.1 implements the latest five-row direction from the local design
 prototype at `/home/home/Projects/Handheld game UI design/Handheld UI.dc.html`.
 The prototype SHA-256 at implementation time was
 `4ac07b3312846b29092ee9b5a62b46eb96a4431226b68b51da22cc803e78b986`.

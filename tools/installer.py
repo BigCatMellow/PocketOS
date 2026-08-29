@@ -39,7 +39,7 @@ ONION_URL   = "https://github.com/OnionUI/Onion/releases/latest"
 GITHUB_API  = "https://api.github.com/repos/BigCatMellow/PocketOS/releases/latest"
 GITHUB_REPO = "https://github.com/BigCatMellow/PocketOS/releases/latest"
 
-VERSION = "v1.2.0"
+VERSION = "v1.2.1"
 
 
 # ── ROM import constants ──────────────────────────────────────────────────────
