@@ -21,7 +21,7 @@ THEME_VARIANTS = tuple(path.stem.removeprefix("theme_")
                        for path in sorted(THEME_SOURCE.glob("theme_*.json")))
 SCREENS = (
     "most", "browse", "library", "favorites", "settings",
-    "apps", "settings-list", "font", "theme", "device", "about",
+    "apps", "settings-list", "appearance", "font", "theme", "device", "about",
     "recent", "options", "rom-info", "save-info",
 )
 
@@ -53,6 +53,7 @@ def create_fixture(sd: Path) -> None:
     if sd.exists():
         shutil.rmtree(sd)
     (sd / ".tmp_update" / "logs").mkdir(parents=True)
+    (sd / ".tmp_update" / "config").mkdir(parents=True)
     (sd / ".tmp_update" / "res" / "pocketos").mkdir(parents=True)
     (sd / ".tmp_update" / "onionVersion").mkdir(parents=True)
     (sd / "Saves" / "CurrentProfile" / "play_activity").mkdir(parents=True)
@@ -165,7 +166,7 @@ def bmp_stats(path: Path) -> tuple[int, int, int]:
     return width, abs(height), len(colors)
 
 
-def render(binary: Path, output: Path) -> None:
+def render(binary: Path, output: Path, strict_theme_hashes: bool = True) -> None:
     hashes = set()
     for screen in SCREENS:
         bmp = output / f"{screen}.bmp"
@@ -208,7 +209,7 @@ def render(binary: Path, output: Path) -> None:
         if colors < 12:
             raise RuntimeError(f"{name} render appears blank ({colors} colors)")
         digest = __import__("hashlib").sha256(bmp.read_bytes()).hexdigest()
-        if digest in theme_hashes:
+        if strict_theme_hashes and digest in theme_hashes:
             raise RuntimeError(f"{name} duplicated another legacy theme")
         theme_hashes.add(digest)
         png = output / f"{name}.png"
@@ -224,14 +225,24 @@ def main() -> None:
         default=ROOT / "build" / "handheld-ui",
         help="directory for the host binary, fixture, and screenshots",
     )
+    parser.add_argument(
+        "--appearance",
+        choices=("light", "dark"),
+        default="light",
+        help="render with PocketOS light or dark appearance mode",
+    )
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     sd = output / "sd"
     binary = output / "pocketOS-host"
     create_fixture(sd)
+    (sd / ".tmp_update" / "config" / "pocketosAppearance").write_text(
+        "1\n" if args.appearance == "dark" else "0\n",
+        encoding="utf-8",
+    )
     compile_launcher(binary, sd)
-    render(binary, output)
+    render(binary, output, strict_theme_hashes=args.appearance == "light")
 
 
 if __name__ == "__main__":

@@ -70,7 +70,7 @@ class HandheldUiContractTests(unittest.TestCase):
         renderer = (ROOT / "tools" / "render_handheld_ui.py").read_text(encoding="utf-8")
         for screen in (
             "apps", "settings-list", "font", "theme", "device", "about",
-            "recent", "options", "rom-info", "save-info",
+            "appearance", "recent", "options", "rom-info", "save-info",
         ):
             self.assertIn(f'"{screen}"', renderer)
 
@@ -78,6 +78,9 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("static void refresh_browser_palette(void)", self.source)
         self.assertIn("theme_accent = mapped_color(C_SEL_BORDER)", self.source)
         self.assertIn("theme_pick_sel = current_theme_index()", self.source)
+        self.assertIn('"Appearance"', self.source)
+        self.assertIn('"pocketosAppearance"', self.source)
+        self.assertIn("apply_appearance_mode();", self.source)
         self.assertIn("browser_palette.is_light", self.source)
         self.assertIn("color_luma(bg) >= 145", self.source)
         self.assertIn("if (is_light)", self.source)
@@ -120,7 +123,7 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertEqual("#7834F8", json.loads((theme_dir / "theme_ink.json").read_text())["sel"])
         self.assertEqual("#6F2DFF", json.loads((theme_dir / "theme_snow.json").read_text())["sel"])
 
-    def test_all_theme_backgrounds_are_light(self):
+    def test_themes_are_light_accent_palettes(self):
         theme_dir = ROOT / "assets" / "res" / "pocketos"
         for path in sorted(theme_dir.glob("theme_*.json")):
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -130,6 +133,12 @@ class HandheldUiContractTests(unittest.TestCase):
                 luma = (299 * r + 587 * g + 114 * b) // 1000
                 self.assertGreaterEqual(luma, 225, f"{path.name} {key} is too dark")
             self.assertEqual("#FFFFFF", data["white"], f"{path.name} selected text is not white")
+
+    def test_dark_mode_is_a_separate_appearance_setting(self):
+        self.assertIn('read_config_int("pocketosAppearance", 0)', self.source)
+        self.assertIn('write_config_int("pocketosAppearance", !dark)', self.source)
+        self.assertIn('snprintf(out, outlen, "%s", dark ? "Dark" : "Light")', self.source)
+        self.assertIn("C_BG          = mapped_pixel(mix_color(base, accent_border, 18))", self.source)
 
     def test_device_info_uses_onion_runtime_version_sources(self):
         self.assertIn('/.tmp_update/onionVersion/version.txt', self.source)

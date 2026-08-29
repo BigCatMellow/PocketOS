@@ -190,6 +190,10 @@ static void draw_theme_picker(void);
 static void on_theme_picker_key(SDLKey k);
 static void load_theme(char *font_out, int font_outlen);
 static void load_theme_file(const char *path, char *font_out, int font_outlen);
+static void set_palette_defaults(void);
+static void apply_appearance_mode(void);
+static void reload_theme_palette(void);
+static void clear_text_cache(void);
 static void clear_text_cache(void);
 static SDL_Color browser_text(void);
 static SDL_Color browser_secondary(void);
@@ -390,6 +394,7 @@ static SettingsEntry SETTINGS_ENTRIES[] = {
     { "Blue Light",       "icon_bluelight.png",    "bluelightlvl", NULL, 0 },
     { "PWM Frequency",    "icon_pwmfreq.png",      "pwmfreq",      NULL, 0 },
     { "Font",             "icon_font.png",         "font",         NULL, 0 },
+    { "Appearance",       "icon_theme.png",        "appearance",   NULL, 0 },
     { "Theme",            "icon_theme.png",        "theme",        NULL, 0 },
     HDR("AUDIO"),
     { "Volume",           "icon_volume.png",       "audio",        NULL, 0 },
@@ -1114,6 +1119,9 @@ static void settings_value(const SettingsEntry *entry, char *out, int outlen) {
         } else {
             snprintf(out, outlen, "Default");
         }
+    } else if (strcmp(k, "appearance") == 0) {
+        int dark = read_config_int("pocketosAppearance", 0);
+        snprintf(out, outlen, "%s", dark ? "Dark" : "Light");
     } else if (strcmp(k, "theme") == 0) {
         if (theme_pick_sel >= 0 && theme_pick_sel < theme_list_count) {
             char label[64];
@@ -2259,6 +2267,12 @@ static void adjust_setting(int delta) {
     } else if (strcmp(k, "network") == 0) {
         int wifi = json_int_file(POCKETOS_ROOT "/system.json", "wifi", 0);
         apply_wifi(!wifi);
+        play_select();
+    } else if (strcmp(k, "appearance") == 0) {
+        int dark = read_config_int("pocketosAppearance", 0);
+        write_config_int("pocketosAppearance", !dark);
+        reload_theme_palette();
+        clear_text_cache();
         play_select();
     } else if (strcmp(k, "power") == 0 && delta == 0) {
         run_settings_action(SETTINGS_ENTRIES[settings_sel].cmd);
@@ -5318,6 +5332,7 @@ static void preview_theme_index(int idx) {
     if (idx < 0 || idx >= theme_list_count) return;
     if (theme_preview_active) restore_theme_palette(&theme_preview_original);
     load_theme_file(theme_list_path[idx], NULL, 0);
+    apply_appearance_mode();
     refresh_browser_palette();
 }
 
@@ -5755,6 +5770,64 @@ static void load_theme(char *font_out, int font_outlen) {
     load_theme_file(path, font_out, font_outlen);
 }
 
+static void set_palette_defaults(void) {
+    C_BG          = RGBA(0xF8, 0xF1, 0xE6);
+    C_BAR         = RGBA(0xFF, 0xFD, 0xF8);
+    C_SEP         = RGBA(0xE4, 0xD8, 0xC7);
+    C_SEL         = RGBA(0x7D, 0x3C, 0xFF);
+    C_SEL_HI      = RGBA(0x9B, 0x6B, 0xFF);
+    C_SEL_BORDER  = RGBA(0x5C, 0x1F, 0xE0);
+    C_PANEL_HDR   = RGBA(0xEF, 0xE3, 0xD4);
+    C_PANEL_HI    = RGBA(0xF4, 0xEA, 0xDB);
+    C_DIVIDER     = RGBA(0xD5, 0xC5, 0xB0);
+    C_CARD        = RGBA(0xFF, 0xFC, 0xF6);
+    C_CARD_BORDER = RGBA(0xE6, 0xD8, 0xC3);
+
+    SC_TEXT    = (SDL_Color){ 37,  25,  52, 255};
+    SC_WHITE   = (SDL_Color){255, 255, 255, 255};
+    SC_DIM     = (SDL_Color){102,  88, 112, 255};
+    SC_SUB_SEL = (SDL_Color){239, 227, 255, 255};
+    SC_ARROW   = (SDL_Color){125,  60, 255, 255};
+    SC_HDR     = (SDL_Color){ 37,  25,  52, 255};
+}
+
+static void apply_appearance_mode(void) {
+    int dark = read_config_int("pocketosAppearance", 0) ? 1 : 0;
+    if (!dark) {
+        SC_WHITE = (SDL_Color){255, 255, 255, 255};
+        return;
+    }
+
+    SDL_Color accent = mapped_color(C_SEL);
+    SDL_Color accent_hi = mapped_color(C_SEL_HI);
+    SDL_Color accent_border = mapped_color(C_SEL_BORDER);
+    SDL_Color base = {0x0E, 0x0F, 0x13, 0xFF};
+    SDL_Color plum = {0x22, 0x16, 0x32, 0xFF};
+    SDL_Color white = {0xF6, 0xF1, 0xFF, 0xFF};
+
+    C_BG          = mapped_pixel(mix_color(base, accent_border, 18));
+    C_BAR         = mapped_pixel(mix_color(base, accent, 12));
+    C_SEP         = mapped_pixel(mix_color(plum, accent_hi, 48));
+    C_CARD        = mapped_pixel(mix_color(base, white, 12));
+    C_CARD_BORDER = mapped_pixel(mix_color(plum, accent_border, 72));
+    C_PANEL_HDR   = mapped_pixel(mix_color(base, accent, 24));
+    C_PANEL_HI    = mapped_pixel(mix_color(plum, accent_hi, 44));
+    C_DIVIDER     = mapped_pixel(mix_color(plum, accent_border, 88));
+
+    SC_TEXT    = white;
+    SC_WHITE   = (SDL_Color){255, 255, 255, 255};
+    SC_DIM     = mix_color(white, base, 116);
+    SC_SUB_SEL = mix_color(white, accent, 38);
+    SC_HDR     = white;
+}
+
+static void reload_theme_palette(void) {
+    set_palette_defaults();
+    load_theme(NULL, 0);
+    apply_appearance_mode();
+    refresh_browser_palette();
+}
+
 static void load_theme_file(const char *path, char *font_out, int font_outlen) {
     if (font_out && font_outlen > 0) font_out[0] = '\0';
     FILE *f = fopen(path, "r");
@@ -5910,20 +5983,11 @@ int main(int argc, char *argv[]) {
     log_msg("fonts loaded OK");
 
     // Resolve palette defaults — off-white surfaces with atomic purple accents
-    C_BG          = RGBA(0xF8, 0xF1, 0xE6);
-    C_BAR         = RGBA(0xFF, 0xFD, 0xF8);
-    C_SEP         = RGBA(0xE4, 0xD8, 0xC7);
-    C_SEL         = RGBA(0x7D, 0x3C, 0xFF);
-    C_SEL_HI      = RGBA(0x9B, 0x6B, 0xFF);
-    C_SEL_BORDER  = RGBA(0x5C, 0x1F, 0xE0);
-    C_PANEL_HDR   = RGBA(0xEF, 0xE3, 0xD4);
-    C_PANEL_HI    = RGBA(0xF4, 0xEA, 0xDB);
-    C_DIVIDER     = RGBA(0xD5, 0xC5, 0xB0);
-    C_CARD        = RGBA(0xFF, 0xFC, 0xF6);
-    C_CARD_BORDER = RGBA(0xE6, 0xD8, 0xC3);
+    set_palette_defaults();
 
     // Apply theme color overrides (second pass — defaults are now set)
     load_theme(NULL, 0);
+    apply_appearance_mode();
     refresh_browser_palette();
 
     { LogTimer _t = log_timer_begin("load_systems");
@@ -5962,6 +6026,8 @@ int main(int argc, char *argv[]) {
         browser_category = 4; state = STATE_APPS;
     } else if (start_screen && strcmp(start_screen, "settings-list") == 0) {
         browser_category = 4; open_settings_kind("brightness");
+    } else if (start_screen && strcmp(start_screen, "appearance") == 0) {
+        browser_category = 4; open_settings_kind("appearance");
     } else if (start_screen && strcmp(start_screen, "font") == 0) {
         browser_category = 4;
         font_pick_sel = current_font_index();
