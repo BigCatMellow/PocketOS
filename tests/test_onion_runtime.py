@@ -140,6 +140,25 @@ class RuntimeBehaviorTests(unittest.TestCase):
         self.assertTrue(restored.endswith("# user customization\n"))
         self.assertIn("./MainUI 2>&1 > /dev/null", restored)
 
+    def test_reinstall_after_stock_runtime_change_refreshes_backup(self):
+        first = STOCK_RUNTIME.replace("printf reached", "printf first")
+        second = STOCK_RUNTIME.replace("printf reached", "printf second")
+        self.runtime.write_text(first, encoding="utf-8")
+        install_runtime_hook(self.root)
+        backup = self.root / BACKUP_REL
+        self.assertEqual(first, backup.read_text(encoding="utf-8"))
+
+        # Simulate Onion replacing runtime.sh with a newer stock runtime.
+        self.runtime.write_text(second, encoding="utf-8")
+        self.runtime.chmod(0o755)
+        install_runtime_hook(self.root)
+        self.assertEqual(second, backup.read_text(encoding="utf-8"))
+
+        self.assertTrue(remove_runtime_hook(self.root))
+        restored = self.runtime.read_text(encoding="utf-8")
+        self.assertIn("printf second", restored)
+        self.assertNotIn("printf first", restored)
+
 
 if __name__ == "__main__":
     unittest.main()

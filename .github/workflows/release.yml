@@ -86,6 +86,7 @@ jobs:
           chmod +x dist/bin/pocketOS
           mkdir -p staging/.tmp_update/bin
           mkdir -p staging/.tmp_update/res
+          mkdir -p staging/App
           cp dist/bin/pocketOS staging/.tmp_update/bin/pocketOS
           cp -r assets/res/pocketos staging/.tmp_update/res/pocketos
           cp tools/install_runtime.py staging/install-pocketos.py
@@ -94,6 +95,8 @@ jobs:
           cp tools/pocketos_stress_test.sh staging/pocketos-stress-test.sh
           cp tools/onion_baseline_monitor.sh staging/onion-baseline-monitor.sh
           cp tools/launcher_comparison_monitor.sh staging/launcher-comparison-monitor.sh
+          cp -r "assets/App/PocketOS Test Center" staging/App/
+          chmod +x "staging/App/PocketOS Test Center/launch.sh"
           cp README.md staging/README.md
           (cd staging && find . -type f ! -name manifest.sha256 -print0 \
             | LC_ALL=C sort -z \
@@ -173,12 +176,15 @@ jobs:
           chmod +x dist/bin/pocketOS
           mkdir -p payload/.tmp_update/bin
           mkdir -p payload/.tmp_update/res
+          mkdir -p payload/App
           cp dist/bin/pocketOS payload/.tmp_update/bin/pocketOS
           cp -r assets/res/pocketos payload/.tmp_update/res/pocketos
           cp tools/pocketos_health_report.py payload/pocketos-health-report.py
           cp tools/pocketos_stress_test.sh payload/pocketos-stress-test.sh
           cp tools/onion_baseline_monitor.sh payload/onion-baseline-monitor.sh
           cp tools/launcher_comparison_monitor.sh payload/launcher-comparison-monitor.sh
+          cp -r "assets/App/PocketOS Test Center" payload/App/
+          chmod +x "payload/App/PocketOS Test Center/launch.sh"
 
       - name: Prepare payload (Windows)
         if: matrix.label == 'windows'
@@ -186,12 +192,14 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "payload/.tmp_update/bin"
           New-Item -ItemType Directory -Force -Path "payload/.tmp_update/res"
+          New-Item -ItemType Directory -Force -Path "payload/App"
           Copy-Item "dist/bin/pocketOS" "payload/.tmp_update/bin/pocketOS"
           Copy-Item -Recurse "assets/res/pocketos" "payload/.tmp_update/res/pocketos"
           Copy-Item "tools/pocketos_health_report.py" "payload/pocketos-health-report.py"
           Copy-Item "tools/pocketos_stress_test.sh" "payload/pocketos-stress-test.sh"
           Copy-Item "tools/onion_baseline_monitor.sh" "payload/onion-baseline-monitor.sh"
           Copy-Item "tools/launcher_comparison_monitor.sh" "payload/launcher-comparison-monitor.sh"
+          Copy-Item -Recurse "assets/App/PocketOS Test Center" "payload/App/"
 
       - name: Build installer
         run: >

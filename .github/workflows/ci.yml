@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GUI test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+      - name: Run Python and contract tests
+        run: python3 -m unittest discover -v
+      - name: Validate shell scripts
+        run: bash -n tools/pocketos_stress_test.sh tools/onion_baseline_monitor.sh tools/launcher_comparison_monitor.sh
+
+  arm-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build PocketOS for Miyoo Mini
+        run: |
+          docker run --rm \
+            -v "$PWD:/root/workspace" \
+            aemiii91/miyoomini-toolchain@sha256:e5123590ad75d27f0f4c91196e3119a255cad45f3ae15243e29a8e0a2ec50132 \
+            bash -l -c "source /root/.bashrc; make -C /root/workspace/src/pocketOS clean all"

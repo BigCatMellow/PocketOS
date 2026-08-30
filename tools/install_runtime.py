@@ -19,6 +19,7 @@ def install_payload(payload_root: Path, sd_root: Path) -> None:
     sd_root = sd_root.resolve()
     source_binary = payload_root / ".tmp_update" / "bin" / "pocketOS"
     source_resources = payload_root / ".tmp_update" / "res" / "pocketos"
+    source_test_center = payload_root / "App" / "PocketOS Test Center"
     if not source_binary.is_file():
         raise FileNotFoundError(f"PocketOS binary not found: {source_binary}")
     if not source_resources.is_dir():
@@ -57,6 +58,17 @@ def install_payload(payload_root: Path, sd_root: Path) -> None:
     shutil.copy2(source_binary, binary_staging)
     os.replace(binary_staging, destination_binary)
     destination_binary.chmod(0o755)
+
+    if source_test_center.is_dir():
+        destination_test_center = sd_root / "App" / "PocketOS Test Center"
+        staging_test_center = destination_test_center.with_name(".PocketOS Test Center.installing")
+        if staging_test_center.exists():
+            shutil.rmtree(staging_test_center)
+        shutil.copytree(source_test_center, staging_test_center)
+        if destination_test_center.exists():
+            shutil.rmtree(destination_test_center)
+        staging_test_center.rename(destination_test_center)
+        (destination_test_center / "launch.sh").chmod(0o755)
 
 
 def main() -> int:

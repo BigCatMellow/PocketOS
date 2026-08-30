@@ -73,8 +73,8 @@ PocketOS can write a small local health log—memory use, available memory, batt
 The installer is a terminal setup tool that validates your SD card before it copies anything. It handles everything in one go:
 
 1. **Installs PocketOS** onto your SD card
-2. **Imports ROMs** from a folder you choose — unzips them and places each game in the correct system folder automatically
-3. **Cleans up bad dumps** — optionally removes inferior variants (bad dumps, overdumps, hacks, pirates) and keeps the best verified dump per game
+2. **Imports recognized ROMs** from a folder you choose — unambiguous formats are streamed safely into canonical Onion system folders; ambiguous disc/archive formats are skipped rather than guessed
+3. **Analyzes ROM variants** — optionally flags likely duplicate, bad-dump, hack, or alternate variants for review without deleting ROM files
 4. **Scans genres** using the OpenVGDB database so Browse by Genre works out of the box
 5. **Applies genre overrides** to fix common mis-tags
 
@@ -86,7 +86,7 @@ Download the installer for your platform:
 | Windows | `PocketOS-Installer-windows.zip` — extract, then run `PocketOS-Installer-windows.exe` |
 | macOS | `PocketOS-Installer-macos.tar.gz` — extract, then run `./PocketOS-Installer-macos` |
 
-Point it at your SD card and choose **Install PocketOS**. The installer checks for Onion's runtime files, installs a fail-open launcher hook, makes the PocketOS binary executable, can import ROM ZIPs, and checks for newer versions automatically.
+Point it at your SD card and choose **Install PocketOS**. The installer checks for Onion's runtime files, installs a fail-open launcher hook, makes the PocketOS binary executable, can import safely recognized ROM ZIPs, and checks for newer versions automatically.
 
 ### Manual install
 
@@ -108,7 +108,7 @@ PocketOS can filter your library by genre. The Setup Suite handles this automati
 | Windows | `PocketOS-GenreScanner-windows.exe` |
 | macOS | `PocketOS-GenreScanner-macos.tar.gz` — extract, then run `./PocketOS-GenreScanner-macos` |
 
-Point it at your SD card and it'll scan all your ROM folders and write `miyoogamelist.xml` files for each system.
+Point it at your SD card and it'll scan all your ROM folders and preserve existing `miyoogamelist.xml` metadata while adding or updating genre information.
 
 ---
 
@@ -122,7 +122,7 @@ The Setup Suite includes a standalone **ROM Importer** tool if you want to add g
 | Windows | `PocketOS-ROMImporter-windows.exe` |
 | macOS | `PocketOS-ROMImporter-macos.tar.gz` — extract, then run `./PocketOS-ROMImporter-macos` |
 
-It scans a folder for ZIP files, extracts the ROMs into the correct system folders on your SD card, optionally removes bad/duplicate dumps, and re-scans genres — the same pipeline the installer runs.
+It scans a folder for ZIP files, safely imports formats it can identify without guessing, can analyze possible variants without deleting them, and re-scans genres while preserving existing metadata — the same safety model used by the installer.
 
 ---
 

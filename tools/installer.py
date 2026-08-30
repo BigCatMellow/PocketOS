@@ -5,7 +5,6 @@ import os
 import re
 import sys
 import json
-import zlib
 import shutil
 import sqlite3
 import tempfile
@@ -14,13 +13,33 @@ import urllib.error
 import webbrowser
 import zipfile
 import xml.etree.ElementTree as ET
-from xml.dom import minidom
 from pathlib import Path
 
 try:
     from .onion_runtime import BEGIN_MARKER, END_MARKER, install_runtime_hook, remove_runtime_hook
 except ImportError:  # Direct script and PyInstaller execution.
     from onion_runtime import BEGIN_MARKER, END_MARKER, install_runtime_hook, remove_runtime_hook
+
+try:
+    from .onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
+except ImportError:  # Direct script and PyInstaller execution.
+    from onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
+
+try:
+    from .genre_overrides import load_overrides as load_genre_overrides
+except ImportError:  # Direct script and PyInstaller execution.
+    from genre_overrides import load_overrides as load_genre_overrides
+
+try:
+    from .rom_safety import (
+        GamelistError, crc32_of, extract_zip_roms, index_games,
+        load_gamelist_tree, write_xml_atomic,
+    )
+except ImportError:  # Direct script and PyInstaller execution.
+    from rom_safety import (
+        GamelistError, crc32_of, extract_zip_roms, index_games,
+        load_gamelist_tree, write_xml_atomic,
+    )
 
 # ── Bundled assets path ───────────────────────────────────────────────────────
 if getattr(sys, "frozen", False):
@@ -37,6 +56,7 @@ PAYLOAD_HEALTH_REPORT = BASE_DIR / "pocketos-health-report.py"
 PAYLOAD_STRESS_TEST = BASE_DIR / "pocketos-stress-test.sh"
 PAYLOAD_ONION_MONITOR = BASE_DIR / "onion-baseline-monitor.sh"
 PAYLOAD_COMPARISON_MONITOR = BASE_DIR / "launcher-comparison-monitor.sh"
+PAYLOAD_TEST_CENTER_APP = BASE_DIR / "App" / "PocketOS Test Center"
 RUNTIME_REL = Path(".tmp_update") / "runtime.sh"
 
 ONION_URL   = "https://github.com/OnionUI/Onion/releases/latest"
@@ -48,44 +68,9 @@ VERSION = "v1.2.8"
 
 # ── ROM import constants ──────────────────────────────────────────────────────
 
-EXT_TO_SYSTEMS = {
-    ".nes":  ["FC",  "NES"],      ".fds":  ["FC",  "NES"],
-    ".sfc":  ["SFC", "SNES"],     ".smc":  ["SFC", "SNES"],
-    ".gb":   ["GB",  "SGB"],      ".gbc":  ["GBC"],
-    ".gba":  ["GBA"],             ".n64":  ["N64"],
-    ".z64":  ["N64"],             ".v64":  ["N64"],
-    ".nds":  ["NDS"],             ".md":   ["MD",  "GEN", "GENESIS"],
-    ".smd":  ["MD",  "GEN", "GENESIS"],
-    ".gen":  ["MD",  "GEN", "GENESIS"],
-    ".sms":  ["SMS"],             ".gg":   ["GG"],
-    ".pce":  ["PCE"],             ".lnx":  ["LYNX"],
-    ".ws":   ["WSWAN"],           ".wsc":  ["WSWANC"],
-    ".ngp":  ["NGP"],             ".ngc":  ["NGPC"],
-    ".col":  ["COLECO"],          ".iso":  ["PS"],
-    ".bin":  ["PS"],              ".cue":  ["PS"],
-    ".pbp":  ["PS"],              ".chd":  ["PS"],
-    ".img":  ["PS"],
-}
-
-ROM_EXTS = set(EXT_TO_SYSTEMS.keys())
+ROM_EXTS = set(ROM_EXTENSIONS)
 
 DOC_NAMES = {"readme", "license", "changelog", "credits", "notes", "info", "manual"}
-
-SYSTEM_MAP = {
-    "FC": "Nintendo Entertainment System",       "NES": "Nintendo Entertainment System",
-    "SFC": "Nintendo Super Nintendo Entertainment System",
-    "SNES": "Nintendo Super Nintendo Entertainment System",
-    "GB": "Nintendo Game Boy",                   "SGB": "Nintendo Game Boy",
-    "GBC": "Nintendo Game Boy Color",            "GBA": "Nintendo Game Boy Advance",
-    "N64": "Nintendo 64",                        "NDS": "Nintendo DS",
-    "MD": "Sega Genesis/Mega Drive",             "GEN": "Sega Genesis/Mega Drive",
-    "GENESIS": "Sega Genesis/Mega Drive",        "SMS": "Sega Master System",
-    "GG": "Sega Game Gear",                      "PCE": "NEC PC Engine/TurboGrafx-16",
-    "LYNX": "Atari Lynx",                        "WSWAN": "Bandai WonderSwan",
-    "WSWANC": "Bandai WonderSwan Color",         "NGP": "SNK Neo Geo Pocket",
-    "NGPC": "SNK Neo Geo Pocket Color",          "COLECO": "Coleco ColecoVision",
-    "PS": "Sony PlayStation",
-}
 
 # ── Genre scan SQL ────────────────────────────────────────────────────────────
 
@@ -171,6 +156,95 @@ def _copy_file_atomic(src: Path, dest: Path):
     shutil.copy2(src, tmp)
     os.replace(tmp, dest)
 
+POCKETOS_TRANSACTION_PATHS = (
+    Path(".tmp_update/res/pocketos"),
+    Path(".tmp_update/bin/pocketOS"),
+    Path("pocketos-health-report.py"),
+    Path("pocketos-stress-test.sh"),
+    Path("onion-baseline-monitor.sh"),
+    Path("launcher-comparison-monitor.sh"),
+    Path("App/PocketOS Test Center"),
+    Path(".tmp_update/runtime.sh"),
+    Path(".tmp_update/runtime.sh.before-pocketos"),
+)
+
+
+def _remove_snapshot_target(path: Path):
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+class _InstallTransaction:
+    """Rollback guard for the small set of paths PocketOS owns or mutates."""
+
+    def __init__(self, sd: Path):
+        self.sd = sd
+        tmp_root = sd / ".tmp_update"
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        self.root = Path(tempfile.mkdtemp(prefix=".pocketos-transaction-", dir=tmp_root))
+        self.entries = []
+        self.parent_state = {
+            sd / ".tmp_update" / "bin": (sd / ".tmp_update" / "bin").exists(),
+            sd / ".tmp_update" / "res": (sd / ".tmp_update" / "res").exists(),
+        }
+        for index, relative in enumerate(POCKETOS_TRANSACTION_PATHS):
+            target = sd / relative
+            existed = target.exists() or target.is_symlink()
+            backup = self.root / str(index)
+            kind = None
+            link_target = None
+            if existed:
+                if target.is_symlink():
+                    kind = "symlink"
+                    link_target = os.readlink(target)
+                elif target.is_dir():
+                    kind = "dir"
+                    shutil.copytree(target, backup, symlinks=True)
+                else:
+                    kind = "file"
+                    shutil.copy2(target, backup, follow_symlinks=False)
+            self.entries.append((target, existed, kind, backup, link_target))
+
+    def rollback(self):
+        for target, existed, kind, backup, link_target in reversed(self.entries):
+            if target.exists() or target.is_symlink():
+                _remove_snapshot_target(target)
+            if not existed:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if kind == "dir":
+                shutil.copytree(backup, target, symlinks=True)
+            elif kind == "symlink":
+                os.symlink(link_target, target)
+            else:
+                shutil.copy2(backup, target, follow_symlinks=False)
+        for parent, existed in self.parent_state.items():
+            if not existed and parent.is_dir():
+                try:
+                    parent.rmdir()
+                except OSError:
+                    pass
+        self._cleanup()
+
+    def commit(self):
+        self._cleanup()
+
+    def _cleanup(self):
+        if self.root.exists():
+            shutil.rmtree(self.root)
+
+
+def _remove_owned_file(path: Path, log, label: str):
+    if path.exists() or path.is_symlink():
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        log(f"  Removed {label}")
+
+
 def _replace_tree(src: Path, dest: Path, preserve=()):
     staging = dest.with_name(f".{dest.name}.installing")
     backup = dest.with_name(f".{dest.name}.previous")
@@ -201,60 +275,84 @@ def install_from_dir(src: Path, sd: Path, log):
         log(f"  WARNING: {warning}")
     if errors:
         raise RuntimeError("; ".join(errors))
-    bin_src  = src / ".tmp_update" / "bin" / "pocketOS"
-    res_src  = src / ".tmp_update" / "res" / "pocketos"
-    bin_dest = sd  / ".tmp_update" / "bin"
-    res_dest = sd  / ".tmp_update" / "res" / "pocketos"
+
+    bin_src = src / ".tmp_update" / "bin" / "pocketOS"
+    res_src = src / ".tmp_update" / "res" / "pocketos"
+    bin_dest = sd / ".tmp_update" / "bin"
+    res_dest = sd / ".tmp_update" / "res" / "pocketos"
     report_dest = sd / "pocketos-health-report.py"
     stress_dest = sd / "pocketos-stress-test.sh"
     onion_monitor_dest = sd / "onion-baseline-monitor.sh"
     comparison_monitor_dest = sd / "launcher-comparison-monitor.sh"
+    test_center_dest = sd / "App" / "PocketOS Test Center"
+    test_center_src = src / "App" / "PocketOS Test Center"
     if not bin_src.exists():
         raise FileNotFoundError(f"Binary not found: {bin_src}")
     if not res_src.is_dir():
         raise FileNotFoundError(f"Assets not found: {res_src}")
-    log("  Setting up folders on SD card...")
-    bin_dest.mkdir(parents=True, exist_ok=True)
-    log("  Copying themes, icons, and fonts...")
-    _replace_tree(res_src, res_dest, preserve=(Path("theme.json"),))
-    if PAYLOAD_HEALTH_REPORT.is_file():
-        _copy_file_atomic(PAYLOAD_HEALTH_REPORT, report_dest)
-    if PAYLOAD_STRESS_TEST.is_file():
-        _copy_file_atomic(PAYLOAD_STRESS_TEST, stress_dest)
-        stress_dest.chmod(0o755)
-    if PAYLOAD_ONION_MONITOR.is_file():
-        _copy_file_atomic(PAYLOAD_ONION_MONITOR, onion_monitor_dest)
-        onion_monitor_dest.chmod(0o755)
-    if PAYLOAD_COMPARISON_MONITOR.is_file():
-        _copy_file_atomic(PAYLOAD_COMPARISON_MONITOR, comparison_monitor_dest)
-        comparison_monitor_dest.chmod(0o755)
-    log("  Copying PocketOS launcher...")
-    _copy_file_atomic(bin_src, bin_dest / "pocketOS")
-    (bin_dest / "pocketOS").chmod(0o755)
-    log("  Installing fail-open Onion launcher hook...")
-    install_runtime_hook(sd)
-    errors, _warnings = audit_install(sd, src)
-    if errors:
-        raise RuntimeError("Post-install audit failed: " + "; ".join(errors))
+
+    transaction = _InstallTransaction(sd)
+    try:
+        log("  Setting up folders on SD card...")
+        bin_dest.mkdir(parents=True, exist_ok=True)
+        log("  Copying themes, icons, and fonts...")
+        _replace_tree(res_src, res_dest, preserve=(Path("theme.json"),))
+        if PAYLOAD_HEALTH_REPORT.is_file():
+            _copy_file_atomic(PAYLOAD_HEALTH_REPORT, report_dest)
+        if PAYLOAD_STRESS_TEST.is_file():
+            _copy_file_atomic(PAYLOAD_STRESS_TEST, stress_dest)
+            stress_dest.chmod(0o755)
+        if PAYLOAD_ONION_MONITOR.is_file():
+            _copy_file_atomic(PAYLOAD_ONION_MONITOR, onion_monitor_dest)
+            onion_monitor_dest.chmod(0o755)
+        if PAYLOAD_COMPARISON_MONITOR.is_file():
+            _copy_file_atomic(PAYLOAD_COMPARISON_MONITOR, comparison_monitor_dest)
+            comparison_monitor_dest.chmod(0o755)
+        if test_center_src.is_dir():
+            _replace_tree(test_center_src, test_center_dest)
+            (test_center_dest / "launch.sh").chmod(0o755)
+        log("  Copying PocketOS launcher...")
+        _copy_file_atomic(bin_src, bin_dest / "pocketOS")
+        (bin_dest / "pocketOS").chmod(0o755)
+        log("  Installing fail-open Onion launcher hook...")
+        install_runtime_hook(sd)
+        errors, _warnings = audit_install(sd, src)
+        if errors:
+            raise RuntimeError("Post-install audit failed: " + "; ".join(errors))
+    except Exception:
+        transaction.rollback()
+        raise
+    else:
+        transaction.commit()
 
 def install(sd: Path, log):
     install_from_dir(BASE_DIR, sd, log)
 
 def uninstall(sd: Path, log):
-    log("  Restoring the stock Onion launcher...")
-    remove_runtime_hook(sd)
-    log("  Removing PocketOS launcher...")
-    target = sd / ".tmp_update" / "bin" / "pocketOS"
-    if target.exists():
-        target.unlink()
-        log("  Removed launcher binary")
+    transaction = _InstallTransaction(sd)
+    try:
+        log("  Restoring the stock Onion launcher...")
+        remove_runtime_hook(sd)
+        log("  Removing PocketOS launcher...")
+        _remove_owned_file(sd / ".tmp_update" / "bin" / "pocketOS", log, "launcher binary")
+        log("  Removing themes and assets...")
+        res = sd / ".tmp_update" / "res" / "pocketos"
+        if res.exists():
+            shutil.rmtree(res)
+            log("  Removed themes, icons, and fonts")
+        for filename, label in (
+            ("pocketos-health-report.py", "health report helper"),
+            ("pocketos-stress-test.sh", "stress-test helper"),
+            ("onion-baseline-monitor.sh", "Onion baseline monitor"),
+            ("launcher-comparison-monitor.sh", "launcher comparison monitor"),
+        ):
+            _remove_owned_file(sd / filename, log, label)
+        _remove_owned_file(sd / "App" / "PocketOS Test Center", log, "PocketOS Test Center")
+    except Exception:
+        transaction.rollback()
+        raise
     else:
-        log("  PocketOS binary not found — may already be uninstalled")
-    log("  Removing themes and assets...")
-    res = sd / ".tmp_update" / "res" / "pocketos"
-    if res.exists():
-        shutil.rmtree(res)
-        log("  Removed themes, icons, and fonts")
+        transaction.commit()
 
 
 # ── ROM import helpers ────────────────────────────────────────────────────────
@@ -264,23 +362,16 @@ def _is_doc_file(name: str) -> bool:
     return stem in DOC_NAMES or any(stem.startswith(d) for d in DOC_NAMES)
 
 def detect_system(zip_path: Path):
-    AMBIGUOUS = {".bin", ".img", ".iso", ".chd"}
+    """Return a safe extension-derived Onion target; ambiguous formats are skipped."""
     try:
         with zipfile.ZipFile(zip_path) as zf:
-            names = [n for n in zf.namelist() if not n.endswith("/")]
-            best_ext, best_candidates = None, []
-            for name in names:
+            for name in (n for n in zf.namelist() if not n.endswith("/")):
                 if _is_doc_file(name):
                     continue
                 ext = Path(name).suffix.lower()
-                if ext not in EXT_TO_SYSTEMS:
-                    continue
-                candidates = EXT_TO_SYSTEMS[ext]
-                if ext not in AMBIGUOUS:
-                    return ext, candidates
-                if not best_ext:
-                    best_ext, best_candidates = ext, candidates
-            return best_ext, best_candidates
+                candidates = candidates_for_extension(ext)
+                if candidates:
+                    return ext, list(candidates)
     except Exception:
         pass
     return None, []
@@ -292,24 +383,9 @@ def find_system_folder(roms_root: Path, candidates: list):
             return p
     return None
 
-def extract_zip(zip_path: Path, dest_folder: Path, log) -> list:
-    extracted = []
-    try:
-        with zipfile.ZipFile(zip_path) as zf:
-            for member in [n for n in zf.namelist() if not n.endswith("/")]:
-                ext = Path(member).suffix.lower()
-                if ext not in ROM_EXTS or _is_doc_file(member):
-                    continue
-                out_path = dest_folder / Path(member).name
-                if out_path.exists():
-                    log(f"    SKIP (exists): {out_path.name}")
-                    continue
-                out_path.write_bytes(zf.read(member))
-                extracted.append(out_path)
-                log(f"    extracted: {out_path.name}")
-    except Exception as e:
-        log(f"    ERROR reading {zip_path.name}: {e}")
-    return extracted
+def extract_zip(zip_path: Path, dest_folder: Path, allowed_extensions, log) -> list:
+    """Use the shared preflighted, streamed, atomic ZIP extractor."""
+    return extract_zip_roms(zip_path, dest_folder, set(allowed_extensions), log)
 
 
 # ── Variant cleanup ───────────────────────────────────────────────────────────
@@ -342,33 +418,28 @@ def _rom_score(name: str) -> int:
     return score
 
 def clean_variants(folder: Path, log) -> int:
+    """Report likely variants without deleting or moving user files."""
     rom_files = [f for f in sorted(folder.iterdir())
                  if f.is_file() and f.suffix.lower() in ROM_EXTS]
     groups: dict = {}
     for f in rom_files:
         groups.setdefault(_base_name(f.stem), []).append(f)
-    removed = 0
+    flagged = 0
     for files in groups.values():
         if len(files) == 1:
             continue
         scored = sorted(files, key=lambda f: (-_rom_score(f.name), f.name))
-        log(f"    keep:   {scored[0].name}")
+        log(f"    suggested keep: {scored[0].name}")
         for f in scored[1:]:
-            log(f"    remove: {f.name}")
-            f.unlink()
-            removed += 1
-    return removed
+            log(f"    possible variant (no action): {f.name}")
+            flagged += 1
+    return flagged
 
 
 # ── Genre scan helpers ────────────────────────────────────────────────────────
 
 def _crc32_of(path: Path) -> str:
-    try:
-        with open(path, "rb") as f:
-            data = f.read(64 * 1024 * 1024)
-        return f"{zlib.crc32(data) & 0xFFFFFFFF:08X}"
-    except Exception:
-        return ""
+    return crc32_of(path)
 
 def _db_lookup(db, rom: Path, system_name: str):
     crc = _crc32_of(rom)
@@ -381,34 +452,10 @@ def _db_lookup(db, rom: Path, system_name: str):
         return row[0], row[1] or "Unsorted"
     return None
 
-def _load_existing(gamelist: Path) -> dict:
-    result = {}
-    if not gamelist.exists():
-        return result
-    try:
-        for el in ET.parse(gamelist).getroot().findall("game"):
-            path = (el.findtext("path") or "").lstrip("./")
-            result[path] = {"path": path,
-                            "name":  el.findtext("name") or path,
-                            "genre": el.findtext("genre") or "Unsorted"}
-    except Exception:
-        pass
-    return result
-
-def _write_gamelist(games: list, dest: Path):
-    root = ET.Element("gameList")
-    for g in sorted(games, key=lambda x: x["name"].lower()):
-        el = ET.SubElement(root, "game")
-        ET.SubElement(el, "path").text  = "./" + g["path"]
-        ET.SubElement(el, "name").text  = g["name"]
-        ET.SubElement(el, "genre").text = g["genre"]
-    pretty = minidom.parseString(ET.tostring(root, encoding="unicode")).toprettyxml(indent="  ", encoding=None)
-    dest.write_text(pretty, encoding="utf-8")
-
 def scan_genres_for_system(roms_root: Path, system_folder: str, db_path: Path, log) -> int:
-    system_dir  = roms_root / system_folder
-    gamelist    = system_dir / "miyoogamelist.xml"
-    system_name = SYSTEM_MAP.get(system_folder.upper())
+    system_dir = roms_root / system_folder
+    gamelist = system_dir / "miyoogamelist.xml"
+    system_name = openvgdb_system_name(system_folder)
     if not system_name:
         return 0
     try:
@@ -416,21 +463,33 @@ def scan_genres_for_system(roms_root: Path, system_folder: str, db_path: Path, l
     except Exception as e:
         log(f"    DB open failed: {e}")
         return 0
-    existing = _load_existing(gamelist)
-    games    = list(existing.values())
-    added    = 0
+
+    try:
+        tree = load_gamelist_tree(gamelist)
+    except GamelistError as e:
+        db.close()
+        log(f"    ERROR: {e}")
+        return 0
+    root = tree.getroot()
+    existing = index_games(root)
+
+    added = 0
     for rom in sorted(system_dir.iterdir()):
-        if rom.suffix.lower() in {".xml", ".db", ".txt", ""} or not rom.is_file():
+        if not rom.is_file() or rom.suffix.lower() not in ROM_EXTS:
             continue
         if rom.name in existing:
             continue
-        result = _db_lookup(db, rom, system_name)
+        rom_system_name = openvgdb_system_name(system_folder, rom.suffix) or system_name
+        result = _db_lookup(db, rom, rom_system_name)
         name, genre = result if result else (rom.stem, "Unsorted")
-        games.append({"path": rom.name, "name": name, "genre": genre})
+        el = ET.SubElement(root, "game")
+        ET.SubElement(el, "path").text = "./" + rom.name
+        ET.SubElement(el, "name").text = name
+        ET.SubElement(el, "genre").text = genre
         added += 1
     db.close()
     if added:
-        _write_gamelist(games, gamelist)
+        write_xml_atomic(tree, gamelist)
     return added
 
 def apply_overrides(roms_root: Path, system_folder: str, overrides: dict, log) -> int:
@@ -438,8 +497,9 @@ def apply_overrides(roms_root: Path, system_folder: str, overrides: dict, log) -
     if not gamelist.exists():
         return 0
     try:
-        tree = ET.parse(gamelist)
-    except Exception:
+        tree = load_gamelist_tree(gamelist)
+    except GamelistError as exc:
+        log(f"    ERROR: {exc}")
         return 0
     root    = tree.getroot()
     changed = 0
@@ -452,8 +512,7 @@ def apply_overrides(roms_root: Path, system_folder: str, overrides: dict, log) -
             genre_el.text = overrides[name]
             changed += 1
     if changed:
-        pretty = minidom.parseString(ET.tostring(root, encoding="unicode")).toprettyxml(indent="  ", encoding=None)
-        gamelist.write_text(pretty, encoding="utf-8")
+        write_xml_atomic(tree, gamelist)
     return changed
 
 def _asset_dir() -> Path:
@@ -465,12 +524,7 @@ def _asset_dir() -> Path:
     return Path(__file__).parent
 
 def _load_overrides() -> dict:
-    fix_path = _asset_dir() / "fix_unsorted.py"
-    if not fix_path.exists():
-        return {}
-    ns = {}
-    exec(fix_path.read_text(), ns)
-    return ns.get("OVERRIDES", {})
+    return load_genre_overrides()
 
 def _find_db() -> Path | None:
     p = _asset_dir() / "openvgdb.sqlite"
@@ -507,6 +561,19 @@ def _log(text):
         _head(t)
     else:
         _info(t)
+
+
+def _select_candidate(candidates, input_fn=input, warn_fn=_warn):
+    """Require an explicit valid choice; never infer a destructive target."""
+    while True:
+        raw = input_fn(f"\n  Select [1-{len(candidates)}]: ").strip()
+        try:
+            number = int(raw)
+        except ValueError:
+            number = 0
+        if 1 <= number <= len(candidates):
+            return candidates[number - 1]
+        warn_fn(f"Enter a number from 1 to {len(candidates)}")
 
 
 class Installer:
@@ -574,11 +641,7 @@ class Installer:
             print()
             for i, p in enumerate(candidates):
                 print(f"    [{i+1}] {p}")
-            choice = input(f"\n  Select [1-{len(candidates)}]: ").strip()
-            try:
-                self._sd = candidates[int(choice) - 1]
-            except (ValueError, IndexError):
-                self._sd = candidates[0]
+            self._sd = _select_candidate(candidates)
             _ok(f"Selected: {_BOLD}{self._sd}{_R}")
         else:
             _warn("No SD card detected automatically.")
@@ -650,7 +713,7 @@ class Installer:
                 rom_src   = None
                 do_import = False
             else:
-                do_clean = input("  Remove duplicate/bad dumps? [Y/n] ").strip().lower() != "n"
+                do_clean = input("  Analyze possible duplicate/bad-dump variants? [y/N] ").strip().lower() == "y"
 
         print()
         _head("── Phase 1: Installing PocketOS ──")
@@ -676,24 +739,25 @@ class Installer:
                     continue
                 dest_folder = find_system_folder(roms_root, candidates)
                 if dest_folder is None:
-                    dest_folder = roms_root / candidates[0]
-                    dest_folder.mkdir(parents=True, exist_ok=True)
+                    _warn(f"[{candidates[0]}] {zip_path.name} — Onion system folder is not installed; skipping")
+                    skipped += 1
+                    continue
                 _info(f"[{dest_folder.name}] {zip_path.name}")
-                new_files = extract_zip(zip_path, dest_folder, _log)
+                new_files = extract_zip(zip_path, dest_folder, {ext}, _log)
                 extracted_total += len(new_files)
                 if new_files:
                     affected_systems.add(dest_folder.name)
             _ok(f"Extracted {extracted_total} file(s), {skipped} unrecognised skipped")
 
             if do_clean and affected_systems:
-                _head("── Phase 2b: Removing duplicate/bad dumps ──")
-                total_removed = 0
+                _head("── Phase 2b: Analyzing possible variants (no files deleted) ──")
+                total_flagged = 0
                 for sys_folder in sorted(affected_systems):
-                    removed = clean_variants(roms_root / sys_folder, _log)
-                    if removed:
-                        _ok(f"{sys_folder}: removed {removed} variant(s)")
-                        total_removed += removed
-                _ok(f"Total removed: {total_removed}")
+                    flagged = clean_variants(roms_root / sys_folder, _log)
+                    if flagged:
+                        _ok(f"{sys_folder}: flagged {flagged} possible variant(s)")
+                        total_flagged += flagged
+                _ok(f"Total flagged: {total_flagged}; no ROM files were changed")
         else:
             _info("Phase 2: ROM import skipped")
             if roms_root.is_dir():

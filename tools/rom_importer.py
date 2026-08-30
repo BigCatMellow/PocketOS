@@ -20,71 +20,28 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 
-# ── Extension → candidate system folder names (first match wins) ─────────────
-EXT_TO_SYSTEMS = {
-    ".nes":  ["FC",  "NES"],
-    ".fds":  ["FC",  "NES"],
-    ".sfc":  ["SFC", "SNES"],
-    ".smc":  ["SFC", "SNES"],
-    ".gb":   ["GB",  "SGB"],
-    ".gbc":  ["GBC"],
-    ".gba":  ["GBA"],
-    ".n64":  ["N64"],
-    ".z64":  ["N64"],
-    ".v64":  ["N64"],
-    ".nds":  ["NDS"],
-    ".md":   ["MD",  "GEN", "GENESIS"],
-    ".smd":  ["MD",  "GEN", "GENESIS"],
-    ".gen":  ["MD",  "GEN", "GENESIS"],
-    ".sms":  ["SMS"],
-    ".gg":   ["GG"],
-    ".pce":  ["PCE"],
-    ".lnx":  ["LYNX"],
-    ".ws":   ["WSWAN"],
-    ".wsc":  ["WSWANC"],
-    ".ngp":  ["NGP"],
-    ".ngc":  ["NGPC"],
-    ".col":  ["COLECO"],
-    ".iso":  ["PS"],
-    ".bin":  ["PS"],
-    ".cue":  ["PS"],
-    ".pbp":  ["PS"],
-    ".chd":  ["PS"],
-    ".img":  ["PS"],
-}
+try:
+    from .onion_systems import (
+        ROM_EXTENSIONS, candidates_for_extension, extensions_for_folder, openvgdb_system_name,
+    )
+    from .genre_overrides import load_overrides as load_genre_overrides
+    from .rom_safety import (
+        GamelistError, crc32_of, extract_zip_roms, index_games,
+        load_gamelist_tree, write_xml_atomic,
+    )
+except ImportError:  # Direct script and PyInstaller execution.
+    from onion_systems import (
+        ROM_EXTENSIONS, candidates_for_extension, extensions_for_folder, openvgdb_system_name,
+    )
+    from genre_overrides import load_overrides as load_genre_overrides
+    from rom_safety import (
+        GamelistError, crc32_of, extract_zip_roms, index_games,
+        load_gamelist_tree, write_xml_atomic,
+    )
 
-# Extensions we consider ROM files (used to peek inside ZIPs)
-ROM_EXTS = set(EXT_TO_SYSTEMS.keys())
-
-# Filenames that look like documentation even if they share a ROM extension
+# ── Onion ROM/system contract ─────────────────────────────────────────────────
+ROM_EXTS = set(ROM_EXTENSIONS)
 DOC_NAMES = {"readme", "license", "changelog", "credits", "notes", "info", "manual"}
-
-# ── System folder → OpenVGDB system name (for genre scanning) ─────────────────
-SYSTEM_MAP = {
-    "FC":       "Nintendo Entertainment System",
-    "NES":      "Nintendo Entertainment System",
-    "SFC":      "Nintendo Super Nintendo Entertainment System",
-    "SNES":     "Nintendo Super Nintendo Entertainment System",
-    "GB":       "Nintendo Game Boy",
-    "SGB":      "Nintendo Game Boy",
-    "GBC":      "Nintendo Game Boy Color",
-    "GBA":      "Nintendo Game Boy Advance",
-    "N64":      "Nintendo 64",
-    "NDS":      "Nintendo DS",
-    "MD":       "Sega Genesis/Mega Drive",
-    "GEN":      "Sega Genesis/Mega Drive",
-    "GENESIS":  "Sega Genesis/Mega Drive",
-    "SMS":      "Sega Master System",
-    "GG":       "Sega Game Gear",
-    "PCE":      "NEC PC Engine/TurboGrafx-16",
-    "LYNX":     "Atari Lynx",
-    "WSWAN":    "Bandai WonderSwan",
-    "WSWANC":   "Bandai WonderSwan Color",
-    "NGP":      "SNK Neo Geo Pocket",
-    "NGPC":     "SNK Neo Geo Pocket Color",
-    "COLECO":   "Coleco ColecoVision",
-    "PS":       "Sony PlayStation",
-}
 
 # ── Genre scanning helpers (inline so we don't depend on genre_scanner.py) ───
 
@@ -107,14 +64,6 @@ QUERY_FILENAME = """
     LIMIT 1
 """
 
-def crc32_of(path: Path) -> str:
-    try:
-        with open(path, "rb") as f:
-            data = f.read(64 * 1024 * 1024)
-        return f"{zlib.crc32(data) & 0xFFFFFFFF:08X}"
-    except Exception:
-        return ""
-
 def db_lookup(db, rom: Path, system_name: str):
     crc = crc32_of(rom)
     if crc:
@@ -125,35 +74,6 @@ def db_lookup(db, rom: Path, system_name: str):
     if row and row[0]:
         return row[0], row[1] or "Unsorted"
     return None
-
-def load_existing(gamelist: Path) -> dict:
-    result = {}
-    if not gamelist.exists():
-        return result
-    try:
-        tree = ET.parse(gamelist)
-        for el in tree.getroot().findall("game"):
-            path = (el.findtext("path") or "").lstrip("./")
-            result[path] = {
-                "path": path,
-                "name": el.findtext("name") or path,
-                "genre": el.findtext("genre") or "Unsorted",
-            }
-    except Exception:
-        pass
-    return result
-
-def write_gamelist(games: list, dest: Path):
-    root = ET.Element("gameList")
-    for g in sorted(games, key=lambda x: x["name"].lower()):
-        el = ET.SubElement(root, "game")
-        ET.SubElement(el, "path").text  = "./" + g["path"]
-        ET.SubElement(el, "name").text  = g["name"]
-        ET.SubElement(el, "genre").text = g["genre"]
-    raw    = ET.tostring(root, encoding="unicode")
-    pretty = minidom.parseString(raw).toprettyxml(indent="  ", encoding=None)
-    dest.write_text(pretty, encoding="utf-8")
-
 
 # ── Core importer logic ───────────────────────────────────────────────────────
 
@@ -171,97 +91,66 @@ def _is_doc_file(name: str) -> bool:
     return stem in DOC_NAMES or any(stem.startswith(d) for d in DOC_NAMES)
 
 def detect_system(zip_path: Path) -> tuple[str | None, list[str]]:
-    """
-    Peek inside the ZIP, find ROM files, return (ext, [candidate folders]).
-    Prefers unambiguous extensions over ambiguous ones (.bin, .img, .iso).
-    Returns (None, []) if nothing recognisable is found.
-    """
-    AMBIGUOUS = {".bin", ".img", ".iso", ".chd"}
+    """Return only extension classifications that are safe without user input."""
     try:
         with zipfile.ZipFile(zip_path) as zf:
-            names = [n for n in zf.namelist() if not n.endswith("/")]
-            best_ext, best_candidates = None, []
-            for name in names:
+            for name in (n for n in zf.namelist() if not n.endswith("/")):
                 if _is_doc_file(name):
                     continue
                 ext = Path(name).suffix.lower()
-                if ext not in EXT_TO_SYSTEMS:
-                    continue
-                candidates = EXT_TO_SYSTEMS[ext]
-                # Prefer unambiguous match; keep looking if we only have ambiguous so far
-                if ext not in AMBIGUOUS:
-                    return ext, candidates
-                if not best_ext:
-                    best_ext, best_candidates = ext, candidates
-            return best_ext, best_candidates
+                candidates = candidates_for_extension(ext)
+                if candidates:
+                    return ext, list(candidates)
     except Exception:
         pass
     return None, []
 
 def extract_zip(zip_path: Path, dest_folder: Path, log) -> list[Path]:
-    """
-    Extract ROM files from zip_path into dest_folder.
-    Skips files that already exist (with a log note).
-    Returns list of newly extracted Paths.
-    """
-    extracted = []
-    try:
-        with zipfile.ZipFile(zip_path) as zf:
-            members = [n for n in zf.namelist() if not n.endswith("/")]
-            for member in members:
-                ext = Path(member).suffix.lower()
-                if ext not in ROM_EXTS or _is_doc_file(member):
-                    continue
-                out_name = Path(member).name
-                out_path = dest_folder / out_name
-                if out_path.exists():
-                    log(f"  SKIP (already exists): {out_name}")
-                    continue
-                data = zf.read(member)
-                out_path.write_bytes(data)
-                extracted.append(out_path)
-                log(f"  extracted: {out_name}")
-    except Exception as e:
-        log(f"  ERROR reading {zip_path.name}: {e}")
-    return extracted
+    allowed = extensions_for_folder(dest_folder.name)
+    if not allowed:
+        log(f"  ERROR: no safe extraction extension contract for {dest_folder.name}")
+        return []
+    return extract_zip_roms(zip_path, dest_folder, allowed, log)
 
 def scan_genres_for_system(roms_root: Path, system_folder: str,
                            db_path: Path, log) -> int:
-    """Scan a single system folder and update its miyoogamelist.xml. Returns count added."""
-    system_dir  = roms_root / system_folder
-    gamelist    = system_dir / "miyoogamelist.xml"
-    system_name = SYSTEM_MAP.get(system_folder.upper())
+    """Add missing genre entries without discarding existing gamelist metadata."""
+    system_dir = roms_root / system_folder
+    gamelist = system_dir / "miyoogamelist.xml"
+    system_name = openvgdb_system_name(system_folder)
     if not system_name:
         log(f"  genre scan: no DB mapping for {system_folder}, skipping")
         return 0
-
     try:
         db = sqlite3.connect(str(db_path))
-    except Exception as e:
-        log(f"  genre scan: DB open failed: {e}")
+    except Exception as exc:
+        log(f"  genre scan: DB open failed: {exc}")
         return 0
-
-    existing = load_existing(gamelist)
-    games    = list(existing.values())
-    added    = 0
-
+    try:
+        tree = load_gamelist_tree(gamelist)
+    except GamelistError as exc:
+        db.close()
+        log(f"  genre scan: {exc}")
+        return 0
+    root = tree.getroot()
+    existing = index_games(root)
+    added = 0
     for rom in sorted(system_dir.iterdir()):
         if rom.suffix.lower() in {".xml", ".db", ".txt", ""} or not rom.is_file():
             continue
-        key = rom.name
-        if key in existing:
+        if rom.name in existing:
             continue
-        result = db_lookup(db, rom, system_name)
-        if result:
-            name, genre = result
-        else:
-            name, genre = rom.stem, "Unsorted"
-        games.append({"path": key, "name": name, "genre": genre})
+        rom_system_name = openvgdb_system_name(system_folder, rom.suffix) or system_name
+        result = db_lookup(db, rom, rom_system_name)
+        name, genre = result if result else (rom.stem, "Unsorted")
+        el = ET.SubElement(root, "game")
+        ET.SubElement(el, "path").text = "./" + rom.name
+        ET.SubElement(el, "name").text = name
+        ET.SubElement(el, "genre").text = genre
         added += 1
-
     db.close()
     if added:
-        write_gamelist(games, gamelist)
+        write_xml_atomic(tree, gamelist)
         log(f"  genre scan: {system_folder} — added {added} entry/entries")
     return added
 
@@ -287,9 +176,7 @@ def apply_overrides_for_system(roms_root: Path, system_folder: str,
             genre_el.text = overrides[name]
             changed += 1
     if changed:
-        raw    = ET.tostring(root, encoding="unicode")
-        pretty = minidom.parseString(raw).toprettyxml(indent="  ", encoding=None)
-        gamelist.write_text(pretty, encoding="utf-8")
+        write_xml_atomic(tree, gamelist)
         log(f"  overrides: {system_folder} — fixed {changed} game(s)")
     return changed
 
@@ -352,14 +239,14 @@ def find_variants_to_remove(folder: Path) -> tuple[list[Path], list[Path]]:
     return to_remove, to_keep
 
 def clean_variants(folder: Path, log) -> int:
-    """Remove duplicate/inferior variants from folder. Returns number removed."""
+    """Report possible variants without modifying user ROM files."""
     to_remove, to_keep = find_variants_to_remove(folder)
     if not to_remove:
         return 0
-    log(f"  keeping  → {to_keep[0].name if to_keep else '?'}")
-    for f in to_remove:
-        log(f"  removing → {f.name}")
-        f.unlink()
+    if to_keep:
+        log(f"  suggested keep → {to_keep[0].name}")
+    for path in to_remove:
+        log(f"  possible variant (no action) → {path.name}")
     return len(to_remove)
 
 
@@ -395,7 +282,7 @@ class App(tk.Tk):
 
         # Options
         self.clean_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(self, text="Remove duplicate/bad/hack variants (keep best dump per game)",
+        tk.Checkbutton(self, text="Analyze possible duplicate/bad/hack variants (no deletion)",
                        variable=self.clean_var).grid(row=3, column=0, columnspan=3, pady=(4, 0))
 
         # Progress bar
@@ -458,6 +345,8 @@ class App(tk.Tk):
         self.after(0, _do)
 
     def _run(self):
+        # Tk variables belong to the UI thread; hand the worker a plain bool.
+        self._clean_requested = bool(self.clean_var.get())
         self.run_btn.config(state="disabled")
         self.progress.start()
         threading.Thread(target=self._import_thread, daemon=True).start()
@@ -492,13 +381,8 @@ class App(tk.Tk):
             self.log(f"  Expected at: {db_path}")
             db_path = None
 
-        # Find fix_unsorted overrides
-        overrides = {}
-        fix_path = Path(__file__).parent / "fix_unsorted.py"
-        if fix_path.exists():
-            ns = {}
-            exec(fix_path.read_text(), ns)
-            overrides = ns.get("OVERRIDES", {})
+        # Data-only manual genre overrides.
+        overrides = load_genre_overrides()
 
         # Scan source for ZIPs
         zips = sorted(src.glob("*.zip"))
@@ -521,10 +405,9 @@ class App(tk.Tk):
 
             dest_folder = find_system_folder(roms_root, candidates)
             if dest_folder is None:
-                # Create the first candidate folder
-                dest_folder = roms_root / candidates[0]
-                dest_folder.mkdir(parents=True, exist_ok=True)
-                self.log(f"[+] Created folder: {dest_folder.name}")
+                self.log(f"[{candidates[0]}] {zip_path.name} — Onion system folder is not installed; skipping")
+                skipped += 1
+                continue
 
             self.log(f"[{dest_folder.name}] {zip_path.name}")
             new_files = extract_zip(zip_path, dest_folder, self.log)
@@ -552,17 +435,17 @@ class App(tk.Tk):
             for sys_folder in sorted(affected_systems):
                 apply_overrides_for_system(roms_root, sys_folder, overrides, self.log)
 
-        # Variant cleanup (optional)
-        if self.clean_var.get() and affected_systems:
-            self.log("\n── Removing duplicate/bad/hack variants ──")
-            total_removed = 0
+        # Variant analysis (optional, deliberately non-destructive)
+        if getattr(self, "_clean_requested", False) and affected_systems:
+            self.log("\n── Analyzing possible duplicate/bad/hack variants (no deletion) ──")
+            total_flagged = 0
             for sys_folder in sorted(affected_systems):
                 folder = roms_root / sys_folder
-                removed = clean_variants(folder, self.log)
-                if removed:
-                    self.log(f"  {sys_folder}: removed {removed} variant(s)")
-                    total_removed += removed
-            self.log(f"  total removed: {total_removed}")
+                flagged = clean_variants(folder, self.log)
+                if flagged:
+                    self.log(f"  {sys_folder}: flagged {flagged} possible variant(s)")
+                    total_flagged += flagged
+            self.log(f"  total flagged: {total_flagged}; no ROM files changed")
 
         self.log("\n✓ All done. Eject SD card and boot.")
 
