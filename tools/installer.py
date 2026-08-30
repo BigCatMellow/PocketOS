@@ -32,12 +32,12 @@ except ImportError:  # Direct script and PyInstaller execution.
 
 try:
     from .rom_safety import (
-        GamelistError, crc32_of, extract_zip_roms, index_games,
+        GamelistError, copy_file_atomic_new, crc32_of, extract_zip_roms, index_games,
         load_gamelist_tree, write_xml_atomic,
     )
 except ImportError:  # Direct script and PyInstaller execution.
     from rom_safety import (
-        GamelistError, crc32_of, extract_zip_roms, index_games,
+        GamelistError, copy_file_atomic_new, crc32_of, extract_zip_roms, index_games,
         load_gamelist_tree, write_xml_atomic,
     )
 
@@ -389,26 +389,7 @@ def extract_zip(zip_path: Path, dest_folder: Path, allowed_extensions, log) -> l
     """Use the shared preflighted, streamed, atomic ZIP extractor."""
     return extract_zip_roms(zip_path, dest_folder, set(allowed_extensions), log)
 
-def copy_archive_as_rom(source: Path, dest_folder: Path, log) -> list[Path]:
-    """Atomically copy an explicitly selected arcade/Neo Geo archive intact."""
-    destination = dest_folder / source.name
-    if destination.exists():
-        log(f"  SKIP (already exists): {source.name}")
-        return []
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{source.name}.", suffix=".pocketos-part", dir=dest_folder)
-    os.close(fd)
-    try:
-        with source.open("rb") as src, open(tmp_name, "wb") as dst:
-            shutil.copyfileobj(src, dst, length=1024 * 1024)
-            dst.flush(); os.fsync(dst.fileno())
-        os.replace(tmp_name, destination)
-    except OSError as exc:
-        log(f"  ERROR copying {source.name}: {exc}")
-        try: os.unlink(tmp_name)
-        except FileNotFoundError: pass
-        return []
-    log(f"  copied intact: {source.name}")
-    return [destination]
+copy_archive_as_rom = copy_file_atomic_new
 
 
 # ── Variant cleanup ───────────────────────────────────────────────────────────

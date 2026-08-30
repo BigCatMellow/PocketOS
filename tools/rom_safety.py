@@ -178,3 +178,30 @@ def extract_zip_roms(
         return []
 
     return extracted
+
+
+def copy_file_atomic_new(source: Path, dest_folder: Path, log) -> list[Path]:
+    """Copy a user-selected ROM intact without replacing an existing file."""
+    destination = dest_folder / source.name
+    if destination.exists():
+        log(f"  SKIP (already exists): {source.name}")
+        return []
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{source.name}.", suffix=".pocketos-part", dir=dest_folder)
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        with source.open("rb") as src, tmp.open("wb") as dst:
+            shutil.copyfileobj(src, dst, length=COPY_CHUNK_BYTES)
+            dst.flush()
+            os.fsync(dst.fileno())
+        os.replace(tmp, destination)
+    except OSError as exc:
+        log(f"  ERROR copying {source.name}: {exc}")
+        return []
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+    log(f"  copied intact: {source.name}")
+    return [destination]

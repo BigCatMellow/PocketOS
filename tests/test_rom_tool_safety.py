@@ -180,7 +180,10 @@ class RomImporterUiSafetyTests(unittest.TestCase):
     def test_variant_analysis_is_truthfully_non_destructive_and_tk_state_is_captured(self):
         source = (Path(__file__).resolve().parents[1] / "tools" / "rom_importer.py").read_text()
         self.assertIn('self._clean_requested = bool(self.clean_var.get())', source)
+        self.assertIn('self._ambiguous_target = self.ambiguous_target_var.get().strip().upper()', source)
         worker = source[source.index("    def _do_import(self):"):]
         self.assertNotIn("self.clean_var.get()", worker)
+        self.assertNotIn("self.ambiguous_target_var.get()", worker)
         self.assertIn("Analyzing possible duplicate/bad/hack variants (no deletion)", source)
         self.assertNotIn("Removing duplicate/bad/hack variants", source)
+        self.assertIn("explicit user selection", source)
