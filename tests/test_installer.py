@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from tools.installer import (
     POCKETOS_TRANSACTION_PATHS, _crc32_of, _select_candidate, audit_install,
-    clean_variants, detect_onion, extract_zip, install_from_dir, scan_genres_for_system, uninstall,
+    clean_variants, copy_archive_as_rom, detect_onion, detect_system, extract_zip, install_from_dir, scan_genres_for_system, uninstall,
 )
 from tools.install_runtime import install_payload
 from tools.onion_runtime import BEGIN_MARKER
@@ -305,6 +305,20 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(["Game.gba"], [path.name for path in extracted])
             self.assertEqual(b"gba-data", (dest / "Game.gba").read_bytes())
             self.assertFalse((dest / "WrongSystem.gb").exists())
+
+    def test_explicit_neogeo_archive_is_copied_intact(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "MetalSlug.zip"
+            destination = root / "NEOGEO"
+            destination.mkdir()
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr("mslug.zip", b"arcade-rom")
+            self.assertEqual((".zip", []), detect_system(archive))
+            copied = copy_archive_as_rom(archive, destination, lambda _message: None)
+            self.assertEqual([destination / archive.name], copied)
+            self.assertEqual(archive.read_bytes(), copied[0].read_bytes())
+            self.assertFalse((destination / "mslug.zip").exists())
 
 
 if __name__ == "__main__":

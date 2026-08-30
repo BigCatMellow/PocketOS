@@ -35,6 +35,11 @@ class OnionSystemRegistryTests(unittest.TestCase):
                 self.assertIn(ext, AMBIGUOUS_EXTENSIONS)
                 self.assertEqual((), candidates_for_extension(ext))
 
+    def test_explicit_targets_can_accept_ambiguous_formats_without_auto_routing(self):
+        from tools.onion_systems import extensions_for_folder
+        self.assertTrue({".cue", ".bin", ".chd"}.issubset(extensions_for_folder("PS")))
+        self.assertEqual(frozenset({".zip"}), extensions_for_folder("NEOGEO"))
+
     def test_optional_n64_is_existing_folder_only(self):
         self.assertEqual(("N64",), candidates_for_extension(".z64"))
 
