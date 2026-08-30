@@ -170,9 +170,22 @@ class HandheldUiContractTests(unittest.TestCase):
         renderer = (ROOT / "tools" / "render_handheld_ui.py").read_text(encoding="utf-8")
         for screen in (
             "apps", "settings-list", "font", "theme", "device", "about",
-            "appearance", "recent", "options", "rom-info", "save-info", "test-center",
+            "appearance", "recent", "options", "guide", "rom-info", "save-info", "test-center",
         ):
             self.assertIn(f'"{screen}"', renderer)
+
+    def test_walkthroughs_are_read_only_rom_sidecars(self):
+        guide = self.source[
+            self.source.index("static void load_guide(void)"):
+            self.source.index("static void enter_game_options", self.source.index("static void load_guide(void)"))
+        ]
+        self.assertIn('"Guides"', guide)
+        self.assertIn('".txt"', guide)
+        self.assertIn('".md"', guide)
+        self.assertIn('fopen(guide_path, "r")', guide)
+        self.assertNotIn('fopen(guide_path, "w")', guide)
+        self.assertIn("GOPTS_GUIDE", self.source)
+        self.assertIn("STATE_GUIDE_VIEWER", self.source)
 
     def test_legacy_themes_feed_the_redesigned_palette(self):
         self.assertIn("static void refresh_browser_palette(void)", self.source)

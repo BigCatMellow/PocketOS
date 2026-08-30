@@ -254,6 +254,7 @@ typedef enum {
     STATE_BROWSE_GAMES,
     STATE_INFO_PANEL,
     STATE_GAME_OPTIONS,
+    STATE_GUIDE_VIEWER,
     STATE_TEST_CENTER,
 } State;
 
@@ -349,6 +350,15 @@ static char game_opts_name[240];
 static char game_opts_path[512];
 static char game_opts_launch[512];
 static char game_opts_system[48];
+
+#define GUIDE_LINE_MAX 160
+#define GUIDE_MAX_LINES 320
+static char guide_lines[GUIDE_MAX_LINES][GUIDE_LINE_MAX];
+static int guide_line_count = 0;
+static int guide_line_offset = 0;
+static int guide_truncated = 0;
+static int guide_available = 0;
+static char guide_path[640];
 
 static PlayEntry recent_entries[MAX_RECENT];
 static int recent_count = 0;
@@ -1399,6 +1409,7 @@ static const char *state_name(int s) {
         case STATE_BROWSE_GAMES: return "BROWSE_GAMES";
         case STATE_INFO_PANEL:   return "INFO_PANEL";
         case STATE_GAME_OPTIONS: return "GAME_OPTIONS";
+        case STATE_GUIDE_VIEWER: return "GUIDE_VIEWER";
         default: return "UNKNOWN";
     }
 }
@@ -4995,9 +5006,103 @@ static void draw_info_row(int x, int y, int w, const char *label, const char *va
 
 #define GOPTS_LAUNCH    0
 #define GOPTS_FAVORITE  1
-#define GOPTS_ROM_INFO  2
-#define GOPTS_SAVE_INFO 3
-#define GOPTS_COUNT     4
+#define GOPTS_GUIDE     2
+#define GOPTS_ROM_INFO  3
+#define GOPTS_SAVE_INFO 4
+#define GOPTS_COUNT     5
+
+/* Guides are user-owned, read-only sidecars. A guide for
+   Roms/FC/Example.nes lives at Roms/FC/Guides/Example.txt (or .md). */
+static void guide_append_line(const char *line) {
+    if (guide_line_count >= GUIDE_MAX_LINES) {
+        guide_truncated = 1;
+        return;
+    }
+    copy_truncated(guide_lines[guide_line_count++], GUIDE_LINE_MAX, line);
+}
+
+static void guide_append_wrapped(const char *line) {
+    const char *p = line;
+    while (*p) {
+        while (*p == ' ') p++;
+        char part[GUIDE_LINE_MAX];
+        int best = 0;
+        int length = 0;
+        while (p[length] && length < GUIDE_LINE_MAX - 1) {
+            part[length] = p[length];
+            part[length + 1] = '\0';
+            if (text_w(font_body, part) > SCREEN_W - 52) break;
+            if (p[length] == ' ') best = length;
+            length++;
+        }
+        if (length == 0) length = 1;
+        if (p[length] && best > 0) length = best;
+        while (length > 0 && p[length - 1] == ' ') length--;
+        memcpy(part, p, (size_t)length);
+        part[length] = '\0';
+        guide_append_line(part);
+        p += length;
+        while (*p == ' ') p++;
+    }
+}
+
+static void load_guide(void) {
+    guide_line_count = 0;
+    guide_line_offset = 0;
+    guide_truncated = 0;
+    guide_available = 0;
+    guide_path[0] = '\0';
+
+    char rom_dir[512], base[240];
+    copy_truncated(rom_dir, sizeof(rom_dir), game_opts_path);
+    char *slash = strrchr(rom_dir, '/');
+    if (!slash) return;
+    *slash = '\0';
+    copy_truncated(base, sizeof(base), slash + 1);
+    char *dot = strrchr(base, '.');
+    if (dot) *dot = '\0';
+
+    const char *extensions[] = {".txt", ".md"};
+    FILE *guide = NULL;
+    for (int i = 0; i < 2 && !guide; i++) {
+        char filename[288], guides_dir[576];
+        snprintf(filename, sizeof(filename), "%s%s", base, extensions[i]);
+        if (!path_join(guides_dir, sizeof(guides_dir), rom_dir, "Guides") ||
+            !path_join(guide_path, sizeof(guide_path), guides_dir, filename))
+            continue;
+        guide = fopen(guide_path, "r");
+    }
+    if (!guide) {
+        guide_path[0] = '\0';
+        return;
+    }
+
+    guide_available = 1;
+    char raw[512];
+    while (fgets(raw, sizeof(raw), guide)) {
+        size_t len = strlen(raw);
+        while (len > 0 && (raw[len - 1] == '\n' || raw[len - 1] == '\r')) raw[--len] = '\0';
+        if (raw[0] == '#') {
+            char *heading = raw;
+            while (*heading == '#') heading++;
+            while (*heading == ' ') heading++;
+            guide_append_line(heading);
+        } else if (raw[0]) {
+            guide_append_wrapped(raw);
+        } else {
+            guide_append_line("");
+        }
+        if (guide_truncated) break;
+    }
+    fclose(guide);
+    if (guide_line_count == 0) guide_append_line("This walkthrough is empty.");
+}
+
+static void open_guide_viewer(void) {
+    load_guide();
+    state = STATE_GUIDE_VIEWER;
+    play_select();
+}
 
 static void enter_game_options(const char *name, const char *path,
                                const char *launch, const char *system,
@@ -5076,10 +5181,11 @@ static void draw_game_options(void) {
         items[GOPTS_FAVORITE] = is_favorite(game_opts_path)
                                 ? "Remove from Favorites"
                                 : "Add to Favorites";
+        items[GOPTS_GUIDE]     = "Walkthrough";
         items[GOPTS_ROM_INFO]  = "ROM Info";
         items[GOPTS_SAVE_INFO] = "Save Info";
 
-        const int row_h = 58;
+        const int row_h = 48;
         int ry = cy + 88;
         for (int i = 0; i < GOPTS_COUNT; i++) {
             int sel = (i == game_opts_sel);
@@ -5184,6 +5290,63 @@ static void draw_game_options(void) {
     draw_secondary_footer(game_opts_mode == 0 ? 5 : 3);
 }
 
+static void draw_guide_viewer(void) {
+    const int category = 2;
+    const int top = BROWSER_HEADER_H;
+    const int bottom = SCREEN_H - BROWSER_FOOTER_H;
+    const int first_y = top + 66;
+    const int rows = 13;
+    fill_rect(0, 0, SCREEN_W, SCREEN_H, browser_rgb(0x0E, 0x0F, 0x13));
+    draw_browser_header(category);
+    fill_rect(0, bottom, SCREEN_W, BROWSER_FOOTER_H, browser_rgb(0x12, 0x14, 0x1A));
+    fill_rect(0, bottom, SCREEN_W, 1, browser_rgb(0x1E, 0x21, 0x28));
+    int x = 14;
+    x += draw_browser_hint(x, "B", "BACK", browser_rgb(0xFF, 0x7A, 0x7A));
+    draw_browser_hint(x, "UP/DN", "SCROLL", browser_rgb(0x7F, 0xB0, 0xFF));
+    draw_browser_hint(505, "L/R", "PAGE", browser_accent(category));
+
+    draw_text(font_small, "WALKTHROUGH", 18, top + 15, browser_accent_text(category));
+    char title[240];
+    truncate_to_fit(font_game, game_opts_name, title, sizeof(title), SCREEN_W - 36);
+    draw_text(font_game, title, 18, top + 38, browser_text());
+    fill_rect(18, top + 58, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+
+    if (!guide_available) {
+        draw_text_center(font_body, "NO OFFLINE WALKTHROUGH FOUND", 0, SCREEN_W,
+                         first_y + 58, browser_secondary());
+        draw_text_center(font_small, "Add a .txt or .md guide beside this ROM:", 0, SCREEN_W,
+                         first_y + 94, browser_dim());
+        draw_text_center(font_small, "Guides/<ROM filename>.txt", 0, SCREEN_W,
+                         first_y + 116, browser_dim());
+        return;
+    }
+
+    for (int row = 0; row < rows && guide_line_offset + row < guide_line_count; row++) {
+        const char *line = guide_lines[guide_line_offset + row];
+        SDL_Color color = line[0] ? browser_text() : browser_dim();
+        draw_text(font_body, line, 24, first_y + row * 24, color);
+    }
+    if (guide_line_offset + rows < guide_line_count)
+        draw_text(font_small, "MORE", SCREEN_W - 56, bottom - 26, browser_accent_text(category));
+    else if (guide_truncated)
+        draw_text(font_small, "GUIDE TRUNCATED", SCREEN_W - 146, bottom - 26, browser_secondary());
+    else
+        draw_text(font_small, "END", SCREEN_W - 44, bottom - 26, browser_dim());
+}
+
+static void on_guide_viewer_key(SDLKey k) {
+    const int rows = 13;
+    int max_offset = guide_line_count > rows ? guide_line_count - rows : 0;
+    if (k == BTN_UP && guide_line_offset > 0) guide_line_offset--;
+    if (k == BTN_DOWN && guide_line_offset < max_offset) guide_line_offset++;
+    if (k == BTN_L2) guide_line_offset = guide_line_offset - rows < 0 ? 0 : guide_line_offset - rows;
+    if (k == BTN_R2) guide_line_offset = guide_line_offset + rows > max_offset ? max_offset : guide_line_offset + rows;
+    if (k == BTN_B || k == BTN_MENU) {
+        state = STATE_GAME_OPTIONS;
+        play_back();
+    }
+}
+
 static void on_game_options_key(SDLKey k) {
     if (game_opts_mode != 0) {
         if (k == BTN_B || k == BTN_MENU) {
@@ -5212,6 +5375,9 @@ static void on_game_options_key(SDLKey k) {
         case GOPTS_FAVORITE:
             toggle_favorite(game_opts_name, game_opts_path, game_opts_launch);
             play_select();
+            break;
+        case GOPTS_GUIDE:
+            open_guide_viewer();
             break;
         case GOPTS_ROM_INFO:
             game_opts_mode = 1;
@@ -5479,6 +5645,9 @@ static void render(void) {
         break;
     case STATE_GAME_OPTIONS:
         draw_game_options();
+        break;
+    case STATE_GUIDE_VIEWER:
+        draw_guide_viewer();
         break;
     case STATE_TEST_CENTER:
         draw_test_center();
@@ -6580,6 +6749,7 @@ int main(int argc, char *argv[]) {
         browser_category = 4; load_recent(); state = STATE_RECENT;
     } else if (start_screen &&
                (strcmp(start_screen, "options") == 0 ||
+                strcmp(start_screen, "guide") == 0 ||
                 strcmp(start_screen, "rom-info") == 0 ||
                 strcmp(start_screen, "save-info") == 0) &&
                sys_count > 0 && game_count > 0) {
@@ -6587,6 +6757,7 @@ int main(int argc, char *argv[]) {
         snprintf(launch, sizeof(launch), "%s/launch.sh", systems[sys_sel].emu_dir);
         enter_game_options(games[game_sel].name, games[game_sel].path, launch,
                            systems[sys_sel].label, STATE_GAMES);
+        if (strcmp(start_screen, "guide") == 0) open_guide_viewer();
         if (strcmp(start_screen, "rom-info") == 0) game_opts_mode = 1;
         if (strcmp(start_screen, "save-info") == 0) game_opts_mode = 2;
     } else {
@@ -6655,6 +6826,7 @@ int main(int argc, char *argv[]) {
                 case STATE_BROWSE_GAMES:  on_browse_games_key(k);  break;
                 case STATE_INFO_PANEL:    on_info_panel_key(k);    break;
                 case STATE_GAME_OPTIONS:  on_game_options_key(k);  break;
+                case STATE_GUIDE_VIEWER:  on_guide_viewer_key(k);  break;
                 case STATE_TEST_CENTER:   on_test_center_key(k);   break;
                 }
             }

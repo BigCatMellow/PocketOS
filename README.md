@@ -112,6 +112,23 @@ Point it at your SD card and it'll scan all your ROM folders and preserve existi
 
 ---
 
+## Walkthroughs
+
+Open a game’s **Options → Walkthrough** to read an offline guide without
+changing the game, emulator, ROM, or save. PocketOS looks for a text or
+Markdown sidecar in that ROM system’s `Guides` folder. For example:
+
+```text
+Roms/FC/Chrono Trigger.nes
+Roms/FC/Guides/Chrono Trigger.txt
+```
+
+Use **Up/Down** to scroll, **L/R** to page, and **B** or **MENU** to return to
+Game Options. Guides are read-only; PocketOS never downloads, edits, or
+deletes them.
+
+---
+
 ## ROM Import
 
 The Setup Suite includes a standalone **ROM Importer** tool if you want to add games after initial setup:

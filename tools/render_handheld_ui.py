@@ -22,7 +22,7 @@ THEME_VARIANTS = tuple(path.stem.removeprefix("theme_")
 SCREENS = (
     "most", "browse", "library", "favorites", "settings",
     "apps", "settings-list", "appearance", "font", "theme", "device", "about",
-    "recent", "options", "rom-info", "save-info", "test-center",
+    "recent", "options", "guide", "rom-info", "save-info", "test-center",
 )
 
 SYSTEMS = (
@@ -79,6 +79,8 @@ def create_fixture(sd: Path) -> None:
         roms = sd / "Roms" / label
         emu.mkdir()
         roms.mkdir()
+        guides = roms / "Guides"
+        guides.mkdir()
         (emu / "config.json").write_text(
             json.dumps({
                 "label": label,
@@ -95,6 +97,12 @@ def create_fixture(sd: Path) -> None:
             filename = f"{display}.{extension}"
             rom = roms / filename
             rom.touch()
+            (guides / f"{display}.txt").write_text(
+                f"# {display} walkthrough\n\n"
+                "Start by visiting the fair and speaking with Marle.\n"
+                "Save often before entering a new area.\n",
+                encoding="utf-8",
+            )
             genre = GENRES[(system_index + game_index) % len(GENRES)]
             xml_lines.append(
                 f"  <game><path>./{filename}</path><name>{display}</name>"
