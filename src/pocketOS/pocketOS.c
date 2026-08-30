@@ -3440,7 +3440,6 @@ static void draw_entry_list(const char *title, PlayEntry *entries, int count,
     if (*sel < *offset) *offset = *sel;
     if (*sel >= *offset + rows) *offset = *sel - rows + 1;
 
-    int y0 = 82;
     if (count == 0) {
         const char *hint1 = NULL, *hint2 = NULL;
         if (strcmp(title, "Favorites") == 0) {
@@ -3462,20 +3461,20 @@ static void draw_entry_list(const char *title, PlayEntry *entries, int count,
 
     for (int i = 0; i < rows && *offset + i < count; i++) {
         int idx = *offset + i;
-        int iy = y0 + i * 64;
+        int iy = BROWSER_LIST_Y0 + i * BROWSER_LIST_ROW_H;
         int is_sel = idx == *sel;
         if (is_sel)
-            fill_rect(10, iy + 3, SCREEN_W - 20, 58, browser_accent(4));
+            fill_rect(8, iy + 3, SCREEN_W - 16, 56, browser_accent(4));
         else
-            fill_rect(18, iy + 63, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+            fill_rect(16, iy + 61, SCREEN_W - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
 
         char label[240];
-        truncate_to_fit(font_game, entries[idx].label, label, sizeof(label), 430);
+        truncate_to_fit(font_body, entries[idx].label, label, sizeof(label), 430);
         int tx = show_star ? 46 : 20;
         if (show_star)
             draw_text(font_body, "*", 24, iy + 20,
                       is_sel ? browser_dark_text() : browser_accent_text(0));
-        draw_text(font_game, label, tx, iy + 16,
+        draw_text(font_body, label, tx, iy + 20,
                   is_sel ? browser_dark_text() : browser_text());
         draw_browser_badge(492, iy + 20, 54, entries[idx].system, is_sel);
         if (entries[idx].play_secs > 0) {
@@ -4316,20 +4315,18 @@ static void draw_settings_hub_shell(void) {
     fill_rect(0, 0, SCREEN_W, SCREEN_H, browser_rgb(0x0E, 0x0F, 0x13));
     draw_browser_header(category);
     draw_browser_footer(6, category);
-    draw_text(font_small, "SYSTEM", 18, 61, browser_dim());
+    draw_text(font_small, "SYSTEM", 18, 65, browser_dim());
     draw_text(font_small, "POCKETOS " POCKETOS_VERSION,
               SCREEN_W - 18 - text_w(font_small, "POCKETOS " POCKETOS_VERSION),
-              61, browser_dim());
+              65, browser_dim());
 
-    const int y0 = 82;
-    const int row_h = 64;
     for (int row = 0; row < SETTINGS_HUB_COUNT; row++) {
-        int y = y0 + row * row_h;
+        int y = BROWSER_LIST_Y0 + row * BROWSER_LIST_ROW_H;
         int is_selected = row == selected;
         if (is_selected)
-            fill_rect(10, y + 3, SCREEN_W - 20, row_h - 6, browser_accent(category));
+            fill_rect(8, y + 3, SCREEN_W - 16, 56, browser_accent(category));
         else
-            fill_rect(18, y + row_h - 1, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+            fill_rect(16, y + 61, SCREEN_W - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
 
         Uint32 tag_bg = is_selected ? browser_rgb(0x08, 0x0D, 0x16)
                                     : browser_rgb(0x1E, 0x21, 0x28);
@@ -4589,7 +4586,7 @@ static void draw_secondary_frame(const char *parent, const char *title,
     fill_rect(0, 0, SCREEN_W, SCREEN_H, browser_rgb(0x0E, 0x0F, 0x13));
     draw_secondary_header(parent, title);
     if (meta && meta[0]) {
-        draw_text(font_small, meta, 18, 64, browser_dim());
+        draw_text(font_small, meta, 18, 65, browser_dim());
         fill_rect(18, 81, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
     }
 }
@@ -4744,13 +4741,13 @@ static void draw_apps(void) {
 
     for (int row = 0; row < BROWSER_ROWS && app_offset + row < APP_COUNT; row++) {
         int i   = app_offset + row;
-        int iy  = 82 + row * 64;
+        int iy  = BROWSER_LIST_Y0 + row * BROWSER_LIST_ROW_H;
         int sel = (i == app_sel);
 
         if (sel)
-            fill_rect(10, iy + 3, SCREEN_W - 20, 58, browser_accent(4));
+            fill_rect(8, iy + 3, SCREEN_W - 16, 56, browser_accent(4));
         else
-            fill_rect(18, iy + 63, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+            fill_rect(16, iy + 61, SCREEN_W - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
 
         char initials[3];
         app_initials(APP_ENTRIES[i].label, initials);
@@ -5479,13 +5476,13 @@ static void draw_font_picker(void) {
 
     for (int row = 0; row < BROWSER_ROWS && font_pick_offset + row < font_list_count; row++) {
         int i   = font_pick_offset + row;
-        int iy  = 82 + row * 64;
+        int iy  = BROWSER_LIST_Y0 + row * BROWSER_LIST_ROW_H;
         int sel = (i == font_pick_sel);
 
         if (sel)
-            fill_rect(10, iy + 3, SCREEN_W - 20, 58, browser_accent(4));
+            fill_rect(8, iy + 3, SCREEN_W - 16, 56, browser_accent(4));
         else
-            fill_rect(18, iy + 63, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+            fill_rect(16, iy + 61, SCREEN_W - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
 
         char label[64];
         strncpy(label, font_list_name[i], sizeof(label) - 1);
@@ -5494,8 +5491,8 @@ static void draw_font_picker(void) {
         if (dot) *dot = '\0';
 
         char label_fit[64];
-        truncate_to_fit(font_game, label, label_fit, sizeof(label_fit), 520);
-        draw_text(font_game, label_fit, 20, iy + 16,
+        truncate_to_fit(font_body, label, label_fit, sizeof(label_fit), 520);
+        draw_text(font_body, label_fit, 20, iy + 20,
                   sel ? browser_dark_text() : browser_text());
 
         draw_chevron(SCREEN_W - 28, iy + 32, 7, 2,
@@ -5662,13 +5659,13 @@ static void draw_theme_picker(void) {
 
     for (int row = 0; row < BROWSER_ROWS && theme_pick_offset + row < theme_list_count; row++) {
         int i   = theme_pick_offset + row;
-        int iy  = 82 + row * 64;
+        int iy  = BROWSER_LIST_Y0 + row * BROWSER_LIST_ROW_H;
         int sel = (i == theme_pick_sel);
 
         if (sel)
-            fill_rect(10, iy + 3, SCREEN_W - 20, 58, browser_accent(4));
+            fill_rect(8, iy + 3, SCREEN_W - 16, 56, browser_accent(4));
         else
-            fill_rect(18, iy + 63, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+            fill_rect(16, iy + 61, SCREEN_W - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
 
         char label[64];
         strncpy(label, theme_list_name[i], sizeof(label) - 1);
@@ -5680,8 +5677,8 @@ static void draw_theme_picker(void) {
         if (*p >= 'a' && *p <= 'z') *p -= 32;
 
         char label_fit[64];
-        truncate_to_fit(font_game, p, label_fit, sizeof(label_fit), 440);
-        draw_text(font_game, label_fit, 20, iy + 16,
+        truncate_to_fit(font_body, p, label_fit, sizeof(label_fit), 440);
+        draw_text(font_body, label_fit, 20, iy + 20,
                   sel ? browser_dark_text() : browser_text());
 
         if (sel) {

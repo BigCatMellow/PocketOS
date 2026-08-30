@@ -91,7 +91,7 @@ class HandheldUiContractTests(unittest.TestCase):
             ("draw_library_shell", "draw_favorites_shell"),
             ("draw_favorites_shell", "SETTINGS_HUB_LABELS"),
         ):
-            start = self.source.index(f"static void {function}")
+            start = self.source.rindex(f"static void {function}")
             stop = self.source.index(end, start)
             view = self.source[start:stop]
             self.assertIn("BROWSER_LIST_Y0", view)
@@ -105,6 +105,21 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("truncate_to_fit(font_body, APP_ENTRIES[i].label", apps)
         self.assertIn("draw_text(font_body, label, 78, iy + 20", apps)
         self.assertNotIn("font_game", apps)
+
+    def test_list_style_screens_share_the_primary_geometry_and_body_text(self):
+        for function, end in (
+            ("draw_entry_list", "// ── Browse by genre"),
+            ("draw_settings_hub_shell", "__attribute__((unused)) static void draw_browse"),
+            ("draw_apps", "// ── Info panel"),
+            ("draw_font_picker", "static void on_font_picker_key"),
+            ("draw_theme_picker", "static void on_theme_picker_key"),
+        ):
+            start = self.source.rindex(f"static void {function}")
+            stop = self.source.index(end, start)
+            view = self.source[start:stop]
+            self.assertIn("BROWSER_LIST_Y0", view)
+            self.assertIn("BROWSER_LIST_ROW_H", view)
+            self.assertNotIn("font_game", view)
 
     def test_library_uses_familiar_compact_system_names(self):
         for compact in ("NES", "SNES", "GB", "GBC", "GBA", "Genesis", "PS1"):
