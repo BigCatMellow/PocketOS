@@ -169,10 +169,11 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn('health_log_sample("minute");', self.source)
 
     def test_health_monitor_parses_proc_files_line_by_line(self):
-        start = self.source.index("static long proc_kb_value")
+        start = self.source.index("static long proc_kb_line_value")
         end = self.source.index("static void health_log_sample", start)
         parser = self.source[start:end]
         self.assertIn("fgets(line, sizeof(line), f)", parser)
+        self.assertIn("proc_kb_line_value(line, label)", parser)
         self.assertIn("strtol(p, &end, 10)", parser)
         self.assertNotIn("fscanf", parser)
 

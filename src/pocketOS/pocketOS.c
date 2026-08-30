@@ -1393,23 +1393,35 @@ static void log_state_if_changed(int cur) {
  * Enable by creating HEALTH_LOG_PATH.  The monitor records only launcher
  * health data (never ROM names or other library data), once per minute plus
  * launch/exit.  A bounded CSV keeps SD-card writes and storage use small. */
+static long proc_kb_line_value(const char *line, const char *label) {
+    size_t label_len = strlen(label);
+    if (strncmp(line, label, label_len) != 0) return -1;
+    const char *p = line + label_len;
+    while (*p && isspace((unsigned char)*p)) p++;
+    errno = 0;
+    char *end = NULL;
+    long value = strtol(p, &end, 10);
+    if (end == p || errno == ERANGE) return -1;
+    while (*end && isspace((unsigned char)*end)) end++;
+    if (*end) {
+        if (strncmp(end, "kB", 2) != 0) return -1;
+        end += 2;
+        while (*end && isspace((unsigned char)*end)) end++;
+        if (*end) return -1;
+    }
+    return value;
+}
+
 static long proc_kb_value(const char *path, const char *label) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
     char line[256];
-    size_t label_len = strlen(label);
     while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, label, label_len) != 0) continue;
-        const char *p = line + label_len;
-        while (*p && isspace((unsigned char)*p)) p++;
-        errno = 0;
-        char *end = NULL;
-        long value = strtol(p, &end, 10);
-        if (end != p && errno != ERANGE) {
+        long value = proc_kb_line_value(line, label);
+        if (value >= 0) {
             fclose(f);
             return value;
         }
-        break;
     }
     fclose(f);
     return -1;
