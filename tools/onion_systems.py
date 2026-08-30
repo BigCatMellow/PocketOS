@@ -151,6 +151,18 @@ EXISTING_FOLDER_ONLY_BY_EXT = {
     ".v64": "N64",
 }
 
+# These formats acquire meaning only after the user explicitly selects an
+# installed Onion folder.  ZIP remains intact for arcade hardware, where it is
+# commonly the ROM rather than a container to unpack.
+EXPLICIT_IMPORT_EXTENSIONS = {
+    "PS": frozenset({".cue", ".bin", ".iso", ".img", ".chd", ".m3u"}),
+    "PCECD": frozenset({".cue", ".bin", ".iso", ".img", ".chd", ".m3u"}),
+    "SEGACD": frozenset({".cue", ".bin", ".iso", ".img", ".chd", ".m3u"}),
+    "NEOCD": frozenset({".cue", ".bin", ".iso", ".img", ".chd", ".m3u"}),
+    "ARCADE": frozenset({".zip"}),
+    "NEOGEO": frozenset({".zip"}),
+}
+
 ROM_EXTENSIONS = frozenset(
     set(AUTO_SYSTEM_BY_EXT) | set(AMBIGUOUS_EXTENSIONS) | set(EXISTING_FOLDER_ONLY_BY_EXT)
 )
@@ -176,7 +188,7 @@ def extensions_for_folder(folder: str) -> frozenset[str]:
     canonical = canonical_folder(folder)
     info = SYSTEMS.get(canonical)
     if info:
-        return frozenset(info["extensions"])
+        return frozenset(info["extensions"]) | EXPLICIT_IMPORT_EXTENSIONS.get(canonical, frozenset())
     if canonical == "N64":
         return frozenset({".n64", ".z64", ".v64"})
     return frozenset()

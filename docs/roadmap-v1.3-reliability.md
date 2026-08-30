@@ -16,7 +16,7 @@ Final proof: PR CI + ARM build + adversarial data-integrity tests + independent 
 - [x] Stop invalid SD selection from silently choosing a drive.
 - [x] Consolidate canonical Onion system/folder mappings.
 - [x] Stop ambiguous disc/archive extensions from silently auto-routing to the wrong system.
-- [ ] Add explicit user-selected import support for ambiguous CD/arcade/Neo Geo formats.
+- [x] Add explicit user-selected import support for ambiguous CD/arcade/Neo Geo formats.
 - [x] Replace executable Python overrides with data-only overrides.
 - [x] Stream ZIP extraction with size/free-space/collision limits.
 - [x] Make installer and uninstaller transactional across PocketOS-owned/mutated paths.

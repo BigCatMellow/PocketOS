@@ -122,7 +122,7 @@ The Setup Suite includes a standalone **ROM Importer** tool if you want to add g
 | Windows | `PocketOS-ROMImporter-windows.exe` |
 | macOS | `PocketOS-ROMImporter-macos.tar.gz` — extract, then run `./PocketOS-ROMImporter-macos` |
 
-It scans a folder for ZIP files, safely imports formats it can identify without guessing, can analyze possible variants without deleting them, and re-scans genres while preserving existing metadata — the same safety model used by the installer.
+It scans a folder for ZIP files, safely imports formats it can identify without guessing, and leaves ambiguous CD/archive formats untouched unless you explicitly select an installed Onion target. Arcade and Neo Geo ZIPs are copied intact when selected; they are never blindly extracted. It can also analyze possible variants without deleting them and re-scan genres while preserving existing metadata.
 
 ---
 

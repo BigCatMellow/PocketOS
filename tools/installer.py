@@ -21,9 +21,9 @@ except ImportError:  # Direct script and PyInstaller execution.
     from onion_runtime import BEGIN_MARKER, END_MARKER, install_runtime_hook, remove_runtime_hook
 
 try:
-    from .onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
+    from .onion_systems import AMBIGUOUS_EXTENSIONS, ROM_EXTENSIONS, candidates_for_extension, extensions_for_folder, openvgdb_system_name
 except ImportError:  # Direct script and PyInstaller execution.
-    from onion_systems import ROM_EXTENSIONS, candidates_for_extension, openvgdb_system_name
+    from onion_systems import AMBIGUOUS_EXTENSIONS, ROM_EXTENSIONS, candidates_for_extension, extensions_for_folder, openvgdb_system_name
 
 try:
     from .genre_overrides import load_overrides as load_genre_overrides
@@ -32,12 +32,12 @@ except ImportError:  # Direct script and PyInstaller execution.
 
 try:
     from .rom_safety import (
-        GamelistError, crc32_of, extract_zip_roms, index_games,
+        GamelistError, copy_file_atomic_new, crc32_of, extract_zip_roms, index_games,
         load_gamelist_tree, write_xml_atomic,
     )
 except ImportError:  # Direct script and PyInstaller execution.
     from rom_safety import (
-        GamelistError, crc32_of, extract_zip_roms, index_games,
+        GamelistError, copy_file_atomic_new, crc32_of, extract_zip_roms, index_games,
         load_gamelist_tree, write_xml_atomic,
     )
 
@@ -372,6 +372,8 @@ def detect_system(zip_path: Path):
                 candidates = candidates_for_extension(ext)
                 if candidates:
                     return ext, list(candidates)
+                if ext in AMBIGUOUS_EXTENSIONS:
+                    return ext, []
     except Exception:
         pass
     return None, []
@@ -386,6 +388,8 @@ def find_system_folder(roms_root: Path, candidates: list):
 def extract_zip(zip_path: Path, dest_folder: Path, allowed_extensions, log) -> list:
     """Use the shared preflighted, streamed, atomic ZIP extractor."""
     return extract_zip_roms(zip_path, dest_folder, set(allowed_extensions), log)
+
+copy_archive_as_rom = copy_file_atomic_new
 
 
 # ── Variant cleanup ───────────────────────────────────────────────────────────
@@ -734,8 +738,32 @@ class Installer:
             for zip_path in zips:
                 ext, candidates = detect_system(zip_path)
                 if not candidates:
-                    _info(f"[?] {zip_path.name} — unrecognised, skipping")
-                    skipped += 1
+                    if ext not in AMBIGUOUS_EXTENSIONS:
+                        _info(f"[?] {zip_path.name} — unrecognised, skipping")
+                        skipped += 1
+                        continue
+                    target = input(
+                        f"  {zip_path.name} contains ambiguous {ext} data. "
+                        "Target installed system (blank = skip): "
+                    ).strip().upper()
+                    dest_folder = roms_root / target
+                    allowed = extensions_for_folder(target)
+                    if not target:
+                        _info("  skipped by user")
+                        skipped += 1
+                        continue
+                    if not dest_folder.is_dir() or not allowed:
+                        _warn(f"[{target}] is not an installed supported target; skipping")
+                        skipped += 1
+                        continue
+                    _info(f"[{dest_folder.name}] {zip_path.name} — explicit user selection")
+                    if target in {"ARCADE", "NEOGEO"}:
+                        new_files = copy_archive_as_rom(zip_path, dest_folder, _log)
+                    else:
+                        new_files = extract_zip(zip_path, dest_folder, allowed, _log)
+                    extracted_total += len(new_files)
+                    if new_files:
+                        affected_systems.add(dest_folder.name)
                     continue
                 dest_folder = find_system_folder(roms_root, candidates)
                 if dest_folder is None:

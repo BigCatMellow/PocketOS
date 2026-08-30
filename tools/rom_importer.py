@@ -22,20 +22,20 @@ from tkinter import ttk, filedialog, scrolledtext, messagebox
 
 try:
     from .onion_systems import (
-        ROM_EXTENSIONS, candidates_for_extension, extensions_for_folder, openvgdb_system_name,
+        AMBIGUOUS_EXTENSIONS, SYSTEMS, ROM_EXTENSIONS, candidates_for_extension, extensions_for_folder, openvgdb_system_name,
     )
     from .genre_overrides import load_overrides as load_genre_overrides
     from .rom_safety import (
-        GamelistError, crc32_of, extract_zip_roms, index_games,
+        GamelistError, copy_file_atomic_new, crc32_of, extract_zip_roms, index_games,
         load_gamelist_tree, write_xml_atomic,
     )
 except ImportError:  # Direct script and PyInstaller execution.
     from onion_systems import (
-        ROM_EXTENSIONS, candidates_for_extension, extensions_for_folder, openvgdb_system_name,
+        AMBIGUOUS_EXTENSIONS, SYSTEMS, ROM_EXTENSIONS, candidates_for_extension, extensions_for_folder, openvgdb_system_name,
     )
     from genre_overrides import load_overrides as load_genre_overrides
     from rom_safety import (
-        GamelistError, crc32_of, extract_zip_roms, index_games,
+        GamelistError, copy_file_atomic_new, crc32_of, extract_zip_roms, index_games,
         load_gamelist_tree, write_xml_atomic,
     )
 
@@ -101,6 +101,8 @@ def detect_system(zip_path: Path) -> tuple[str | None, list[str]]:
                 candidates = candidates_for_extension(ext)
                 if candidates:
                     return ext, list(candidates)
+                if ext in AMBIGUOUS_EXTENSIONS:
+                    return ext, []
     except Exception:
         pass
     return None, []
@@ -275,25 +277,31 @@ class App(tk.Tk):
         tk.Entry(self, textvariable=self.sd_var, width=48).grid(row=1, column=1, **pad)
         tk.Button(self, text="Browse…", command=self._pick_sd).grid(row=1, column=2, **pad)
 
+        tk.Label(self, text="Ambiguous ZIP target:").grid(row=2, column=0, sticky="w", **pad)
+        self.ambiguous_target_var = tk.StringVar()
+        ttk.Combobox(self, textvariable=self.ambiguous_target_var, width=45,
+                     values=[""] + sorted(SYSTEMS), state="readonly").grid(row=2, column=1, **pad)
+        tk.Label(self, text="optional").grid(row=2, column=2, sticky="w", **pad)
+
         # Log
         self.log_box = scrolledtext.ScrolledText(self, width=72, height=22,
                                                  state="disabled", font=("Courier New", 10))
-        self.log_box.grid(row=2, column=0, columnspan=3, padx=12, pady=6)
+        self.log_box.grid(row=3, column=0, columnspan=3, padx=12, pady=6)
 
         # Options
         self.clean_var = tk.BooleanVar(value=False)
         tk.Checkbutton(self, text="Analyze possible duplicate/bad/hack variants (no deletion)",
-                       variable=self.clean_var).grid(row=3, column=0, columnspan=3, pady=(4, 0))
+                       variable=self.clean_var).grid(row=4, column=0, columnspan=3, pady=(4, 0))
 
         # Progress bar
         self.progress = ttk.Progressbar(self, mode="indeterminate")
-        self.progress.grid(row=4, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 0))
+        self.progress.grid(row=5, column=0, columnspan=3, sticky="ew", padx=12, pady=(6, 0))
 
         # Run button
         self.run_btn = tk.Button(self, text="Import ROMs", width=20,
                                  command=self._run, bg="#4FA85E", fg="white",
                                  font=(None, 11, "bold"))
-        self.run_btn.grid(row=5, column=0, columnspan=3, pady=10)
+        self.run_btn.grid(row=6, column=0, columnspan=3, pady=10)
 
     def _detect_defaults(self):
         downloads = Path.home() / "Downloads"
@@ -347,6 +355,7 @@ class App(tk.Tk):
     def _run(self):
         # Tk variables belong to the UI thread; hand the worker a plain bool.
         self._clean_requested = bool(self.clean_var.get())
+        self._ambiguous_target = self.ambiguous_target_var.get().strip().upper()
         self.run_btn.config(state="disabled")
         self.progress.start()
         threading.Thread(target=self._import_thread, daemon=True).start()
@@ -399,6 +408,23 @@ class App(tk.Tk):
         for zip_path in zips:
             ext, candidates = detect_system(zip_path)
             if not candidates:
+                target = getattr(self, "_ambiguous_target", "")
+                dest_folder = roms_root / target
+                allowed = extensions_for_folder(target) if target else frozenset()
+                if ext in AMBIGUOUS_EXTENSIONS and dest_folder.is_dir() and allowed:
+                    self.log(f"[{target}] {zip_path.name} — explicit user selection")
+                    if target in {"ARCADE", "NEOGEO"}:
+                        new_files = copy_file_atomic_new(zip_path, dest_folder, self.log)
+                    else:
+                        new_files = extract_zip(zip_path, dest_folder, self.log)
+                    extracted_total += len(new_files)
+                    if new_files:
+                        affected_systems.add(dest_folder.name)
+                    continue
+                if ext in AMBIGUOUS_EXTENSIONS:
+                    self.log(f"[?] {zip_path.name} — ambiguous; choose an installed target or skip")
+                    skipped += 1
+                    continue
                 self.log(f"[?] {zip_path.name} — unrecognised, skipping")
                 skipped += 1
                 continue
