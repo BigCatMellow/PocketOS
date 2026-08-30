@@ -10,6 +10,7 @@ SDROOT=/mnt/SDCARD
 LOGDIR="$SDROOT/.tmp_update/logs"
 PIDFILE="$LOGDIR/launcher_comparison_monitor.pid"
 MAX_BYTES=$((512 * 1024))
+KEEP_AWAKE=/tmp/stay_awake
 
 usage() {
     echo "Usage: $0 {start pocketos|onion minutes|status|stop}"
@@ -80,13 +81,16 @@ start() {
         [ -f "$log" ] && mv "$log" "$log.prev"
         echo "timestamp,event,launcher,launcher_rss_kb,mem_available_kb,battery_percent,cpu_governor" > "$log"
     fi
+    : > "$KEEP_AWAKE"
     (
+        cleanup() { rm -f "$PIDFILE" "$KEEP_AWAKE"; }
+        trap cleanup 0
+        trap 'exit 0' INT TERM
         end=$(( $(date +%s) + minutes * 60 ))
         while [ "$(date +%s)" -lt "$end" ]; do
             sample "$target" "$log"
             sleep 60
         done
-        rm -f "$PIDFILE"
     ) &
     echo "$!" > "$PIDFILE"
     echo "Paired $target comparison started for $minutes minute(s)."
@@ -104,6 +108,7 @@ case "$1" in
         ;;
     stop)
         if [ -f "$PIDFILE" ]; then kill "$(cat "$PIDFILE")" 2>/dev/null; rm -f "$PIDFILE"; fi
+        rm -f "$KEEP_AWAKE"
         echo "Comparison monitor stopped."
         ;;
     *) usage ;;
