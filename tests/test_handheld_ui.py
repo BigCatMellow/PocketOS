@@ -84,6 +84,28 @@ class HandheldUiContractTests(unittest.TestCase):
             self.assertIn("draw_text(font_body, title", view)
             self.assertNotIn("font_game", view)
 
+    def test_primary_game_lists_share_browse_library_geometry(self):
+        for function, end in (
+            ("draw_most_played_shell", "draw_browse_shell"),
+            ("draw_browse_shell", "draw_library_shell"),
+            ("draw_library_shell", "draw_favorites_shell"),
+            ("draw_favorites_shell", "SETTINGS_HUB_LABELS"),
+        ):
+            start = self.source.index(f"static void {function}")
+            stop = self.source.index(end, start)
+            view = self.source[start:stop]
+            self.assertIn("BROWSER_LIST_Y0", view)
+            self.assertIn("BROWSER_LIST_ROW_H", view)
+
+    def test_apps_use_settings_body_text(self):
+        apps = self.source[
+            self.source.index("static void draw_apps"):
+            self.source.index("// ── Info panel", self.source.index("static void draw_apps"))
+        ]
+        self.assertIn("truncate_to_fit(font_body, APP_ENTRIES[i].label", apps)
+        self.assertIn("draw_text(font_body, label, 78, iy + 20", apps)
+        self.assertNotIn("font_game", apps)
+
     def test_library_uses_familiar_compact_system_names(self):
         for compact in ("NES", "SNES", "GB", "GBC", "GBA", "Genesis", "PS1"):
             self.assertIn(f'return "{compact}";', self.source)
