@@ -98,6 +98,8 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #define BROWSER_FOOTER_H 40
 #define BROWSER_BODY_H   (SCREEN_H - BROWSER_HEADER_H - BROWSER_FOOTER_H)
 #define BROWSER_ROWS     5
+#define BROWSER_LIST_Y0  92
+#define BROWSER_LIST_ROW_H 62
 #define TWO_PANEL_LEFT_ROWS 6
 #define SETTINGS_SECTION_H 24
 #define SETTINGS_ROW_H     56
@@ -4031,11 +4033,11 @@ static void draw_most_played_shell(void) {
     if (most_played_sel >= most_played_offset + BROWSER_ROWS)
         most_played_offset = most_played_sel - BROWSER_ROWS + 1;
 
-    draw_text(font_small, "PLAY TIME", 18, 61, browser_dim());
+    draw_text(font_small, "PLAY TIME", 18, 65, browser_dim());
     char count_text[24];
     snprintf(count_text, sizeof(count_text), "%d GAMES", most_played_count);
     draw_text(font_small, count_text, SCREEN_W - 18 - text_w(font_small, count_text),
-              61, browser_dim());
+              65, browser_dim());
 
     if (most_played_count == 0) {
         draw_text_center(font_body, "NO PLAY HISTORY YET", 0, SCREEN_W, 212,
@@ -4045,16 +4047,14 @@ static void draw_most_played_shell(void) {
         return;
     }
 
-    const int y0 = 82;
-    const int row_h = 64;
     for (int row = 0; row < BROWSER_ROWS && most_played_offset + row < most_played_count; row++) {
         int idx = most_played_offset + row;
-        int y = y0 + row * row_h;
+        int y = BROWSER_LIST_Y0 + row * BROWSER_LIST_ROW_H;
         int selected = idx == most_played_sel;
         if (selected)
-            fill_rect(10, y + 3, SCREEN_W - 20, row_h - 6, browser_accent(category));
+            fill_rect(8, y + 3, SCREEN_W - 16, 56, browser_accent(category));
         else
-            fill_rect(18, y + row_h - 1, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+            fill_rect(16, y + 61, SCREEN_W - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
 
         char rank[16];
         snprintf(rank, sizeof(rank), "%02d", idx + 1);
@@ -4138,11 +4138,10 @@ static void draw_browse_shell(void) {
     if (browse_game_sel >= browse_game_off + BROWSER_ROWS)
         browse_game_off = browse_game_sel - BROWSER_ROWS + 1;
 
-    const int right_y0 = 92;
     for (int row = 0; row < BROWSER_ROWS && browse_game_off + row < genre->count; row++) {
         int local_idx = browse_game_off + row;
         int idx = genre->start + local_idx;
-        int y = right_y0 + row * 62;
+        int y = BROWSER_LIST_Y0 + row * BROWSER_LIST_ROW_H;
         int selected = state == STATE_BROWSE_GAMES && local_idx == browse_game_sel;
         if (selected)
             fill_rect(left_w + 8, y + 3, SCREEN_W - left_w - 16, 56, browser_accent(category));
@@ -4230,10 +4229,9 @@ static void draw_library_shell(void) {
         return;
     }
 
-    const int right_y0 = 92;
     for (int row = 0; row < BROWSER_ROWS && game_offset + row < game_count; row++) {
         int idx = game_offset + row;
-        int y = right_y0 + row * 62;
+        int y = BROWSER_LIST_Y0 + row * BROWSER_LIST_ROW_H;
         int selected = state == STATE_GAMES && idx == game_sel;
         if (selected)
             fill_rect(left_w + 8, y + 3, SCREEN_W - left_w - 16, 56, browser_accent(category));
@@ -4267,11 +4265,11 @@ static void draw_favorites_shell(void) {
     if (favorite_sel >= favorite_offset + BROWSER_ROWS)
         favorite_offset = favorite_sel - BROWSER_ROWS + 1;
 
-    draw_text(font_small, "SAVED GAMES", 18, 61, browser_dim());
+    draw_text(font_small, "SAVED GAMES", 18, 65, browser_dim());
     char count_text[24];
     snprintf(count_text, sizeof(count_text), "%d FAVORITES", favorite_count);
     draw_text(font_small, count_text, SCREEN_W - 18 - text_w(font_small, count_text),
-              61, browser_dim());
+              65, browser_dim());
 
     if (favorite_count == 0) {
         draw_text_center(font_body, "NO FAVORITES YET", 0, SCREEN_W, 212,
@@ -4281,16 +4279,14 @@ static void draw_favorites_shell(void) {
         return;
     }
 
-    const int y0 = 82;
-    const int row_h = 64;
     for (int row = 0; row < BROWSER_ROWS && favorite_offset + row < favorite_count; row++) {
         int idx = favorite_offset + row;
-        int y = y0 + row * row_h;
+        int y = BROWSER_LIST_Y0 + row * BROWSER_LIST_ROW_H;
         int selected = idx == favorite_sel;
         if (selected)
-            fill_rect(10, y + 3, SCREEN_W - 20, row_h - 6, browser_accent(category));
+            fill_rect(8, y + 3, SCREEN_W - 16, 56, browser_accent(category));
         else
-            fill_rect(18, y + row_h - 1, SCREEN_W - 36, 1, browser_rgb(0x1E, 0x21, 0x28));
+            fill_rect(16, y + 61, SCREEN_W - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
 
         fill_rect(22, y + 27, 8, 8,
                   selected ? browser_rgb(0x14, 0x08, 0x08) : browser_accent(category));
@@ -4765,8 +4761,8 @@ static void draw_apps(void) {
                          sel ? browser_accent_text(4) : browser_secondary());
 
         char label[128];
-        truncate_to_fit(font_game, APP_ENTRIES[i].label, label, sizeof(label), 500);
-        draw_text(font_game, label, 78, iy + 16,
+        truncate_to_fit(font_body, APP_ENTRIES[i].label, label, sizeof(label), 500);
+        draw_text(font_body, label, 78, iy + 20,
                   sel ? browser_dark_text() : browser_text());
 
         Uint32 chev_col = sel ? browser_rgb(0x0E, 0x0F, 0x13)
