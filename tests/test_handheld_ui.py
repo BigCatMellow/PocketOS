@@ -46,6 +46,26 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertNotIn("draw_browser_badge", library)
         self.assertIn("draw_text(font_body, label, 18", library)
 
+    def test_browse_and_library_share_two_panel_geometry_and_font_roles(self):
+        browse = self.source[
+            self.source.index("static void draw_browse_shell"):
+            self.source.index("static void draw_library_shell")
+        ]
+        library = self.source[
+            self.source.index("static void draw_library_shell"):
+            self.source.index("static void draw_favorites_shell")
+        ]
+        self.assertIn("const int left_w = 260", browse)
+        self.assertIn("const int left_w = 260", library)
+        self.assertIn("TWO_PANEL_LEFT_ROWS", browse)
+        self.assertIn("TWO_PANEL_LEFT_ROWS", library)
+        self.assertIn("left_y0 + row * 54", browse)
+        self.assertIn("left_y0 + row * 54", library)
+        self.assertIn("draw_text(font_body, label, 18", browse)
+        self.assertIn("draw_text(font_body, label, 18", library)
+        self.assertIn("draw_text(font_game", browse)
+        self.assertIn("draw_text(font_game", library)
+
     def test_library_uses_familiar_compact_system_names(self):
         for compact in ("NES", "SNES", "GB", "GBC", "GBA", "Genesis", "PS1"):
             self.assertIn(f'return "{compact}";', self.source)
