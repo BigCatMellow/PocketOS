@@ -4062,8 +4062,8 @@ static void draw_most_played_shell(void) {
                   selected ? browser_dark_text() : browser_dim());
 
         char title[240];
-        truncate_to_fit(font_game, most_played_entries[idx].label, title, sizeof(title), 400);
-        draw_text(font_game, title, 64, y + 16,
+        truncate_to_fit(font_body, most_played_entries[idx].label, title, sizeof(title), 400);
+        draw_text(font_body, title, 64, y + 20,
                   selected ? browser_dark_text() : browser_text());
         draw_browser_badge(486, y + 20, 50, most_played_entries[idx].system, selected);
 
@@ -4295,8 +4295,8 @@ static void draw_favorites_shell(void) {
         fill_rect(22, y + 27, 8, 8,
                   selected ? browser_rgb(0x14, 0x08, 0x08) : browser_accent(category));
         char title[240];
-        truncate_to_fit(font_game, favorite_entries[idx].label, title, sizeof(title), 414);
-        draw_text(font_game, title, 48, y + 16,
+        truncate_to_fit(font_body, favorite_entries[idx].label, title, sizeof(title), 414);
+        draw_text(font_body, title, 48, y + 20,
                   selected ? browser_dark_text() : browser_text());
         draw_browser_badge(548, y + 20, 56, favorite_entries[idx].system, selected);
     }

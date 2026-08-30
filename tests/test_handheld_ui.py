@@ -70,6 +70,20 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("draw_text(font_body, title, title_x, y + 20", library)
         self.assertNotIn("font_game", library)
 
+    def test_most_played_and_favorites_match_settings_body_text(self):
+        most_played = self.source[
+            self.source.index("static void draw_most_played_shell"):
+            self.source.index("static void draw_browse_shell")
+        ]
+        favorites = self.source[
+            self.source.index("static void draw_favorites_shell"):
+            self.source.index("static const char *SETTINGS_HUB_LABELS")
+        ]
+        for view in (most_played, favorites):
+            self.assertIn("truncate_to_fit(font_body", view)
+            self.assertIn("draw_text(font_body, title", view)
+            self.assertNotIn("font_game", view)
+
     def test_library_uses_familiar_compact_system_names(self):
         for compact in ("NES", "SNES", "GB", "GBC", "GBA", "Genesis", "PS1"):
             self.assertIn(f'return "{compact}";', self.source)
