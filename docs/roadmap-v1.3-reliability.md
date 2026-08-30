@@ -1,6 +1,6 @@
 # PocketOS v1.3 Reliability Roadmap
 
-State: WORKING
+State: MERGED — follow-up usability work continues separately.
 
 ## Definition of DONE
 PocketOS is safe-by-default on user ROM libraries, preserves Onion metadata, produces trustworthy health evidence, and blocks regressions before release.
@@ -31,6 +31,6 @@ Final proof: PR CI + ARM build + adversarial data-integrity tests + independent 
 
 Code-side approval evidence must be produced from the current PR head. A green run from an earlier revision does not satisfy the gate after any source, test, workflow, or safety-contract change.
 
-## Current release gate
+## Release conclusion
 
-The device-validation gate is satisfied by the recorded Miyoo run. Do not call the roadmap DONE or merge until the required independent review is complete.
+The reliability work was independently reviewed, passed required CI and ARM build checks, and was squash-merged to `main` in PR #2. The device-validation gate is satisfied by the recorded Miyoo run. The remaining unchecked items are future feature and maintainability work, not release blockers for this reliability arc.

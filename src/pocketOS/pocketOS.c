@@ -4623,18 +4623,26 @@ static void draw_secondary_footer(int mode) {
 
 typedef struct {
     const char *label;
-    const char *detail;
     int minutes;
-    int stock_onion;
+    int mode;
 } TestCenterEntry;
 
+enum {
+    TEST_CENTER_ACTIVE_POCKETOS,
+    TEST_CENTER_IDLE_POCKETOS,
+    TEST_CENTER_IDLE_ONION,
+};
+
 static const TestCenterEntry TEST_CENTER_ENTRIES[] = {
-    { "PocketOS test - 15 min", "Cycles PocketOS screens; no games or settings changes.", 15, 0 },
-    { "PocketOS test - 30 min", "Recommended first launcher memory check.",              30, 0 },
-    { "PocketOS test - 60 min", "Longer launcher stability check.",                       60, 0 },
-    { "Onion baseline - 15 min", "Automatic stock MainUI idle baseline.",                 15, 1 },
-    { "Onion baseline - 30 min", "Recommended first stock-Onion baseline.",              30, 1 },
-    { "Onion baseline - 60 min", "Longer automatic stock-Onion baseline.",               60, 1 },
+    { "PocketOS active test - 15 min", 15, TEST_CENTER_ACTIVE_POCKETOS },
+    { "PocketOS active test - 30 min", 30, TEST_CENTER_ACTIVE_POCKETOS },
+    { "PocketOS active test - 60 min", 60, TEST_CENTER_ACTIVE_POCKETOS },
+    { "PocketOS idle baseline - 15 min", 15, TEST_CENTER_IDLE_POCKETOS },
+    { "PocketOS idle baseline - 30 min", 30, TEST_CENTER_IDLE_POCKETOS },
+    { "PocketOS idle baseline - 60 min", 60, TEST_CENTER_IDLE_POCKETOS },
+    { "Onion idle baseline - 15 min", 15, TEST_CENTER_IDLE_ONION },
+    { "Onion idle baseline - 30 min", 30, TEST_CENTER_IDLE_ONION },
+    { "Onion idle baseline - 60 min", 60, TEST_CENTER_IDLE_ONION },
 };
 #define TEST_CENTER_COUNT ((int)(sizeof(TEST_CENTER_ENTRIES) / sizeof(TEST_CENTER_ENTRIES[0])))
 
@@ -4653,25 +4661,23 @@ static int write_test_seconds(int minutes) {
 }
 
 static void draw_test_center(void) {
-    draw_secondary_frame("Apps", "Test Center", "Automated launcher and stock-Onion baseline tests");
-    const int row_h = 48;
-    const int start_y = 96;
+    draw_secondary_frame("Apps", "Test Center", "Use matching idle baselines for battery comparison");
+    const int row_h = 35;
+    const int start_y = 88;
     for (int i = 0; i < TEST_CENTER_COUNT; i++) {
         const int y = start_y + i * row_h;
         const int selected = i == test_center_sel;
         if (selected)
             fill_rrect(16, y, SCREEN_W - 32, row_h - 4, 6, browser_accent(4));
         SDL_Color title = selected ? browser_dark_text() : browser_text();
-        SDL_Color detail = selected ? browser_dark_text() : browser_secondary();
         draw_text(font_body, TEST_CENTER_ENTRIES[i].label, 30, y + 5, title);
-        draw_text(font_small, TEST_CENTER_ENTRIES[i].detail, 30, y + 28, detail);
     }
-    draw_text_center(font_small, test_center_notice, 0, SCREEN_W, 402, browser_secondary());
+    draw_text_center(font_small, test_center_notice, 0, SCREEN_W, 412, browser_secondary());
     draw_secondary_footer(0);
 }
 
 static void queue_test_center_entry(const TestCenterEntry *entry) {
-    if (!entry->stock_onion) {
+    if (entry->mode == TEST_CENTER_ACTIVE_POCKETOS) {
         mkdir(SYSDIR "/logs", 0755);
         FILE *log = fopen(HEALTH_LOG_PATH, "a");
         if (log) fclose(log);
@@ -4684,16 +4690,23 @@ static void queue_test_center_entry(const TestCenterEntry *entry) {
         }
     } else {
         char command[256];
-        snprintf(command, sizeof(command), "sh %s/onion-baseline-monitor.sh start %d",
-                 POCKETOS_ROOT, entry->minutes);
+        const char *target = entry->mode == TEST_CENTER_IDLE_ONION ? "onion" : "pocketos";
+        snprintf(command, sizeof(command),
+                 "sh %s/launcher-comparison-monitor.sh start %s %d",
+                 POCKETOS_ROOT, target, entry->minutes);
         if (system(command) != 0) {
-            snprintf(test_center_notice, sizeof(test_center_notice), "Could not start the Onion baseline.");
+            snprintf(test_center_notice, sizeof(test_center_notice), "Could not start the idle baseline.");
             return;
         }
-        FILE *fail_flag = fopen("/tmp/pocketos_failed", "w");
-        if (fail_flag) fclose(fail_flag);
-        snprintf(test_center_notice, sizeof(test_center_notice),
-                 "Baseline started. Stock Onion opens after this screen closes.");
+        if (entry->mode == TEST_CENTER_IDLE_ONION) {
+            FILE *fail_flag = fopen("/tmp/pocketos_failed", "w");
+            if (fail_flag) fclose(fail_flag);
+            snprintf(test_center_notice, sizeof(test_center_notice),
+                     "Onion baseline started. Stock Onion opens after this screen closes.");
+        } else {
+            snprintf(test_center_notice, sizeof(test_center_notice),
+                     "PocketOS baseline started. PocketOS opens after this screen closes.");
+        }
     }
     render();
     SDL_Delay(700);

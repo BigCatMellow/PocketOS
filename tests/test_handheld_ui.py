@@ -187,24 +187,28 @@ class HandheldUiContractTests(unittest.TestCase):
 
     def test_test_center_offers_dpad_presets_without_terminal_typing(self):
         self.assertIn("STATE_TEST_CENTER", self.source)
-        self.assertIn('"PocketOS test - 15 min"', self.source)
-        self.assertIn('"PocketOS test - 30 min"', self.source)
-        self.assertIn('"PocketOS test - 60 min"', self.source)
-        self.assertIn('"Onion baseline - 15 min"', self.source)
-        self.assertIn('"Onion baseline - 30 min"', self.source)
-        self.assertIn('"Onion baseline - 60 min"', self.source)
+        self.assertIn('"PocketOS active test - 15 min"', self.source)
+        self.assertIn('"PocketOS active test - 30 min"', self.source)
+        self.assertIn('"PocketOS active test - 60 min"', self.source)
+        self.assertIn('"PocketOS idle baseline - 15 min"', self.source)
+        self.assertIn('"PocketOS idle baseline - 30 min"', self.source)
+        self.assertIn('"PocketOS idle baseline - 60 min"', self.source)
+        self.assertIn('"Onion idle baseline - 15 min"', self.source)
+        self.assertIn('"Onion idle baseline - 30 min"', self.source)
+        self.assertIn('"Onion idle baseline - 60 min"', self.source)
         self.assertIn('"/tmp/pocketos_failed"', self.source)
+        self.assertIn('launcher-comparison-monitor.sh start %s %d', self.source)
         app_root = ROOT / "assets" / "App" / "PocketOS Test Center"
         self.assertTrue((app_root / "config.json").is_file())
         self.assertIn("POCKETOS_START_SCREEN=test-center", (app_root / "launch.sh").read_text())
         self.assertIn('"Test Center",     "app_activity.png"', self.source)
 
-    def test_onion_baseline_monitor_is_separate_and_bounded(self):
+    def test_legacy_onion_baseline_monitor_delegates_to_shared_collector(self):
         runner = (ROOT / "tools" / "onion_baseline_monitor.sh").read_text(encoding="utf-8")
-        self.assertIn("onion_baseline_health.csv", runner)
-        self.assertIn("find_mainui_pid", runner)
-        self.assertIn("sleep 60", runner)
-        self.assertIn("MAX_BYTES", runner)
+        self.assertIn('launcher-comparison-monitor.sh', runner)
+        self.assertIn('exec sh "$MONITOR" start onion "$2"', runner)
+        self.assertNotIn("find_mainui_pid", runner)
+        self.assertNotIn("sleep 60", runner)
 
     def test_paired_comparison_monitor_uses_the_same_schema_for_both_launchers(self):
         runner = (ROOT / "tools" / "launcher_comparison_monitor.sh").read_text(encoding="utf-8")
@@ -213,6 +217,8 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("pocketos:pocketOS", runner)
         self.assertIn("onion:MainUI", runner)
         self.assertIn("sleep 60", runner)
+        self.assertIn("KEEP_AWAKE=/tmp/stay_awake", runner)
+        self.assertIn("trap cleanup 0", runner)
 
     def test_theme_accents_have_visible_range(self):
         theme_dir = ROOT / "assets" / "res" / "pocketos"
