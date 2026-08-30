@@ -74,6 +74,140 @@ the supported hardware.
 **Promotion bar.** Keep only measurements that have a documented device path,
 are low-cost, and improve diagnosis in a reproduced black-screen case.
 
+## E-05 — Browse metadata-reader compatibility
+
+**Area.** Frontend / data boundary
+
+**Observation.** Desktop tools safely write `miyoogamelist.xml` with a real XML
+tree, while the launcher Browse view reads only line-oriented `<path>`,
+`<name>`, and `<genre>` fragments. Valid pretty-printed XML, reordered fields,
+or escaped paths can therefore be represented differently by the writer and
+the consumer.
+
+**Value.** Browse shows the same user library that the importer and genre
+scanner safely maintain, including ordinary Onion/user-authored gamelists.
+
+**Smallest safe experiment.** Add a host fixture containing multi-line,
+reordered, and XML-escaped game fields; verify Browse sees the expected title,
+genre, and launch path without changing the gamelist.
+
+**Promotion bar.** Select a bounded parser/read-model change only after the
+fixture reproduces a visible mismatch on the supported launcher build.
+
+## E-06 — Capacity feedback across all lists
+
+**Area.** Frontend / persistence
+
+**Observation.** System, game, and Browse limits are surfaced, but recent and
+favorite loading stops at fixed capacities, and attempting to add a favorite
+at the capacity limit has no explicit user feedback. The Most Played query also
+intentionally limits its candidate set to 500 rows without exposing that policy
+in the UI.
+
+**Value.** A large library never looks complete when PocketOS is showing only a
+bounded subset, and an attempted action never appears to have been ignored.
+
+**Smallest safe experiment.** Use fixtures just above each capacity and verify
+one visible, truthful indicator for truncation/full capacity while proving the
+source JSON and activity database are unchanged.
+
+**Promotion bar.** Define per-list product policy—raise, paginate, or retain
+the limit—before changing any fixed array or persistent format.
+
+## E-07 — Large-library interaction latency
+
+**Area.** Frontend / backend performance
+
+**Observation.** Moving between systems synchronously reloads the selected ROM
+directory on the UI thread. This is inexpensive on the observed card, but its
+cost grows with folders approaching the current game-list limit.
+
+**Value.** Shoulder/D-pad navigation remains responsive in large collections;
+the user sees a short loading state rather than an unexplained pause or black
+frame.
+
+**Smallest safe experiment.** Create deterministic 100-, 1,000-, and
+1,500-file fixtures and record `load_games` duration plus input-to-render time
+on host and device. This experiment does not alter a user library.
+
+**Promotion bar.** Promote only if a measured budget is exceeded; choose a
+cache, incremental loader, or explicit progress treatment from that evidence.
+
+## E-08 — Behavioral UI journey coverage
+
+**Area.** Frontend verification
+
+**Observation.** The host renderer proves static screens are nonblank and
+distinct, while many UI contracts inspect source text. Neither proves a
+sequence of real SDL inputs reaches the intended state and never launches a
+game unexpectedly.
+
+**Value.** Layout consistency changes can be verified as device behavior, not
+only as source structure or screenshots.
+
+**Smallest safe experiment.** Add a host-only SDL event fixture for a short
+journey through Browse, Library, Favorites, Settings, and back. Assert the
+visited state sequence and that no command file is written without the launch
+button.
+
+**Promotion bar.** Keep journeys compact and behavior-focused; do not turn
+pixel-perfect screenshots into a brittle universal test suite.
+
+## E-09 — Handheld readability evidence
+
+**Area.** Frontend accessibility
+
+**Observation.** Theme checks establish broad luminance bounds and static
+renders, but they do not measure text-to-surface contrast for every role or
+legibility on the actual 640×480 handheld display.
+
+**Value.** A theme/font combination remains readable on hardware, especially
+for selected, muted, and footer text.
+
+**Smallest safe experiment.** Derive contrast ratios from the theme roles and
+render representative small/body/selected text. Flag only clearly inadequate
+combinations for manual handheld review.
+
+**Promotion bar.** Adopt a small role-based contrast contract only after
+hardware review confirms it tracks readability better than a generic score.
+
+## E-10 — Pull-request UI evidence
+
+**Area.** Backend / release pipeline
+
+**Observation.** Normal CI runs Python/contract tests and an ARM build, while
+the host UI renderer runs in the tag-release workflow. A UI regression can
+therefore first receive rendered evidence at release time.
+
+**Value.** Frontend changes receive the same early evidence discipline as
+backend safety changes.
+
+**Smallest safe experiment.** Run the existing host renderer in a disposable
+PR-like environment and measure duration, dependencies, and artifact size.
+
+**Promotion bar.** Add it to normal CI only if the measured cost is acceptable
+and it remains a distinct behavioral/render check rather than duplicate
+ceremony.
+
+## E-11 — Intentional collections beyond one Favorites list
+
+**Area.** User-facing product behavior
+
+**Observation.** A large, intentionally varied library can make one flat
+Favorites list carry several meanings at once: enduring favorites, current
+games, homebrew, ROM hacks, and discoveries.
+
+**Value.** PocketOS can help a user return to meaningful groups without
+reclassifying, deleting, or modifying the underlying ROM library.
+
+**Smallest safe experiment.** Use the host fixture to prototype read-only
+collections such as `Homebrew & Hacks`, `Currently Playing`, and `All-Time`;
+evaluate D-pad navigation and whether each collection has an explainable,
+non-destructive membership rule.
+
+**Promotion bar.** Choose a single data owner and an import/export-compatible
+format before any collection becomes persistent user data.
+
 ## Current focus
 
 PocketOS remains an Onion-integrated launcher. These discoveries are intended
