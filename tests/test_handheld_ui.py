@@ -84,6 +84,29 @@ class HandheldUiContractTests(unittest.TestCase):
             self.assertIn("draw_text(font_body, title", view)
             self.assertNotIn("font_game", view)
 
+    def test_favorites_use_the_library_style_system_filter_without_new_storage(self):
+        favorites = self.source[
+            self.source.index("static void draw_favorites_shell"):
+            self.source.index("static const char *SETTINGS_HUB_LABELS")
+        ]
+        handler = self.source[
+            self.source.index("static void on_favorites_key"):
+            self.source.index("static void on_apps_key")
+        ]
+        self.assertIn("const int left_w = 260", favorites)
+        self.assertIn("favorite_group_count", favorites)
+        self.assertIn("favorite_entry_index_at", favorites)
+        self.assertIn("favorite_focus_games ? 8 : 7", favorites)
+        self.assertNotIn("draw_browser_badge", favorites)
+        self.assertIn("if (!favorite_focus_games)", handler)
+        self.assertIn("(k == BTN_A || k == BTN_RIGHT)", handler)
+        self.assertIn("favorite_focus_games = 1", handler)
+        self.assertIn("if (k == BTN_A) launch_entry(&entry);", handler)
+        self.assertIn("if (k == BTN_B || k == BTN_LEFT)", handler)
+        self.assertIn("favorite_focus_games = 0", handler)
+        self.assertIn("rebuild_favorite_groups();", self.source)
+        self.assertNotIn('"system":', self.source[self.source.index("static void toggle_favorite"):self.source.index("// ── Launch a game")])
+
     def test_primary_game_lists_share_browse_library_geometry(self):
         for function, end in (
             ("draw_most_played_shell", "draw_browse_shell"),

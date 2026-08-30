@@ -360,6 +360,21 @@ static int favorite_count = 0;
 static int favorite_sel = 0;
 static int favorite_offset = 0;
 
+/* Favorites remain owned by Onion's line-delimited favourite.json.  These
+   groups are an in-memory navigation view only: All, known systems, Other. */
+#define MAX_FAVORITE_GROUPS (MAX_SYSTEMS + 2)
+#define FAVORITE_GROUP_ALL   -1
+#define FAVORITE_GROUP_OTHER -2
+typedef struct {
+    int system_idx;  /* index into systems, or FAVORITE_GROUP_* */
+    int count;
+} FavoriteGroup;
+static FavoriteGroup favorite_groups[MAX_FAVORITE_GROUPS];
+static int favorite_group_count = 0;
+static int favorite_group_sel = 0;
+static int favorite_group_offset = 0;
+static int favorite_focus_games = 0;
+
 static PlayEntry most_played_entries[MAX_GAMES];
 static int most_played_count  = 0;
 static int most_played_sel    = 0;
@@ -2057,6 +2072,64 @@ static void load_play_entries(const char *path, PlayEntry *entries, int *count, 
     log_int("load_play_entries count", *count);
 }
 
+static int favorite_entry_system_index(const PlayEntry *entry) {
+    for (int i = 0; i < sys_count; i++) {
+        const char *folder = strrchr(systems[i].emu_dir, '/');
+        folder = folder ? folder + 1 : systems[i].emu_dir;
+        if (strcasecmp(entry->system, folder) == 0) return i;
+    }
+    return FAVORITE_GROUP_OTHER;
+}
+
+static void rebuild_favorite_groups(void) {
+    favorite_group_count = 0;
+    favorite_groups[favorite_group_count++] = (FavoriteGroup){FAVORITE_GROUP_ALL, favorite_count};
+
+    for (int system_idx = 0; system_idx < sys_count; system_idx++) {
+        int count = 0;
+        for (int entry_idx = 0; entry_idx < favorite_count; entry_idx++) {
+            if (favorite_entry_system_index(&favorite_entries[entry_idx]) == system_idx)
+                count++;
+        }
+        if (count > 0 && favorite_group_count < MAX_FAVORITE_GROUPS)
+            favorite_groups[favorite_group_count++] = (FavoriteGroup){system_idx, count};
+    }
+
+    int other_count = 0;
+    for (int entry_idx = 0; entry_idx < favorite_count; entry_idx++) {
+        if (favorite_entry_system_index(&favorite_entries[entry_idx]) == FAVORITE_GROUP_OTHER)
+            other_count++;
+    }
+    if (other_count > 0 && favorite_group_count < MAX_FAVORITE_GROUPS)
+        favorite_groups[favorite_group_count++] = (FavoriteGroup){FAVORITE_GROUP_OTHER, other_count};
+}
+
+static int favorite_group_entry_count(int group_idx) {
+    if (group_idx < 0 || group_idx >= favorite_group_count) return 0;
+    return favorite_groups[group_idx].count;
+}
+
+static int favorite_entry_index_at(int group_idx, int visible_idx) {
+    if (group_idx < 0 || group_idx >= favorite_group_count || visible_idx < 0) return -1;
+    int wanted_system = favorite_groups[group_idx].system_idx;
+    int seen = 0;
+    for (int entry_idx = 0; entry_idx < favorite_count; entry_idx++) {
+        int entry_system = favorite_entry_system_index(&favorite_entries[entry_idx]);
+        int matches = wanted_system == FAVORITE_GROUP_ALL || entry_system == wanted_system;
+        if (!matches) continue;
+        if (seen++ == visible_idx) return entry_idx;
+    }
+    return -1;
+}
+
+static const char *favorite_group_label(int group_idx) {
+    if (group_idx < 0 || group_idx >= favorite_group_count) return "Favorites";
+    int system_idx = favorite_groups[group_idx].system_idx;
+    if (system_idx == FAVORITE_GROUP_ALL) return "All";
+    if (system_idx == FAVORITE_GROUP_OTHER) return "Other";
+    return library_system_name(systems[system_idx].label);
+}
+
 __attribute__((unused)) static void load_recent(void) {
     LogTimer _t = log_timer_begin("load_recent");
     load_play_entries(POCKETOS_ROOT "/Roms/recentlist.json",
@@ -2074,8 +2147,12 @@ static void load_favorites(void) {
     LogTimer _t = log_timer_begin("load_favorites");
     load_play_entries(POCKETOS_ROOT "/Roms/favourite.json",
                       favorite_entries, &favorite_count, 1);
+    rebuild_favorite_groups();
     favorite_sel = 0;
     favorite_offset = 0;
+    favorite_group_sel = 0;
+    favorite_group_offset = 0;
+    favorite_focus_games = 0;
     log_timer_end(_t);
 }
 
@@ -2175,13 +2252,19 @@ static void toggle_favorite(const char *label, const char *rompath, const char *
         }
     }
 
-    /* Re-sort and write back */
+    /* Re-sort and rebuild the in-memory system view; the on-disk format is
+       unchanged and remains owned by Onion's favourite.json contract. */
     qsort(favorite_entries, favorite_count, sizeof(PlayEntry), cmp_play_entry);
-    if (favorite_count == 0) {
+    rebuild_favorite_groups();
+    if (favorite_group_sel >= favorite_group_count) favorite_group_sel = 0;
+    if (favorite_group_offset > favorite_group_sel) favorite_group_offset = favorite_group_sel;
+    int visible_count = favorite_group_entry_count(favorite_group_sel);
+    if (visible_count == 0) {
         favorite_sel = 0;
         favorite_offset = 0;
+        favorite_focus_games = 0;
     } else {
-        if (favorite_sel >= favorite_count) favorite_sel = favorite_count - 1;
+        if (favorite_sel >= visible_count) favorite_sel = visible_count - 1;
         if (favorite_offset > favorite_sel) favorite_offset = favorite_sel;
     }
 
@@ -3984,13 +4067,15 @@ static void draw_browser_footer(int mode, int category) {
     fill_rect(0, y, SCREEN_W, 1, browser_rgb(0x1E, 0x21, 0x28));
 
     int x = 14;
-    x += draw_browser_hint(x, "A", mode == 1 || mode == 3 || mode == 6 ? "OPEN" : "PLAY",
+    x += draw_browser_hint(x, "A", mode == 1 || mode == 3 || mode == 6 || mode == 7 ? "OPEN" : "PLAY",
                            browser_rgb(0x3E, 0xCF, 0x6E));
-    if (mode == 2 || mode == 4)
+    if (mode == 2 || mode == 4 || mode == 8)
         x += draw_browser_hint(x, "B", "BACK", browser_rgb(0xFF, 0x7A, 0x7A));
     if (mode == 2 || mode == 4 || mode == 5)
         x += draw_browser_hint(x, "Y", "FAV", browser_rgb(0xFF, 0xAD, 0x33));
-    if (mode == 0 || mode == 2 || mode == 4 || mode == 5)
+    if (mode == 8)
+        x += draw_browser_hint(x, "Y", "REMOVE", browser_rgb(0xFF, 0xAD, 0x33));
+    if (mode == 0 || mode == 2 || mode == 4 || mode == 5 || mode == 8)
         draw_browser_hint(x, "X", "OPTS", browser_rgb(0x7F, 0xB0, 0xFF));
     if (mode == 3)
         draw_browser_hint(x, "START", "RANDOM", browser_rgb(0xA7, 0x8B, 0xFA));
@@ -4274,18 +4359,17 @@ static void draw_library_shell(void) {
 
 static void draw_favorites_shell(void) {
     int category = 3;
+    const int left_w = 260;
     fill_rect(0, 0, SCREEN_W, SCREEN_H, browser_rgb(0x0E, 0x0F, 0x13));
     draw_browser_header(category);
-    draw_browser_footer(5, category);
+    draw_browser_footer(favorite_focus_games ? 8 : 7, category);
+    fill_rect(left_w, BROWSER_HEADER_H, 1, BROWSER_BODY_H,
+              browser_rgb(0x1E, 0x21, 0x28));
 
-    if (favorite_sel < favorite_offset) favorite_offset = favorite_sel;
-    if (favorite_sel >= favorite_offset + BROWSER_ROWS)
-        favorite_offset = favorite_sel - BROWSER_ROWS + 1;
-
-    draw_text(font_small, "SAVED GAMES", 18, 65, browser_dim());
+    draw_text(font_small, "FAVORITES", 18, 65, browser_dim());
     char count_text[24];
     snprintf(count_text, sizeof(count_text), "%d FAVORITES", favorite_count);
-    draw_text(font_small, count_text, SCREEN_W - 18 - text_w(font_small, count_text),
+    draw_text(font_small, count_text, left_w - 18 - text_w(font_small, count_text),
               65, browser_dim());
 
     if (favorite_count == 0) {
@@ -4296,24 +4380,69 @@ static void draw_favorites_shell(void) {
         return;
     }
 
-    for (int row = 0; row < BROWSER_ROWS && favorite_offset + row < favorite_count; row++) {
-        int idx = favorite_offset + row;
-        int y = BROWSER_LIST_Y0 + row * BROWSER_LIST_ROW_H;
-        int selected = idx == favorite_sel;
-        if (selected)
-            fill_rect(8, y + 3, SCREEN_W - 16, 56, browser_accent(category));
-        else
-            fill_rect(16, y + 61, SCREEN_W - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
+    if (favorite_group_sel < favorite_group_offset)
+        favorite_group_offset = favorite_group_sel;
+    if (favorite_group_sel >= favorite_group_offset + TWO_PANEL_LEFT_ROWS)
+        favorite_group_offset = favorite_group_sel - TWO_PANEL_LEFT_ROWS + 1;
 
-        fill_rect(22, y + 27, 8, 8,
-                  selected ? browser_rgb(0x14, 0x08, 0x08) : browser_accent(category));
-        char title[240];
-        truncate_to_fit(font_body, favorite_entries[idx].label, title, sizeof(title), 414);
-        draw_text(font_body, title, 48, y + 20,
-                  selected ? browser_dark_text() : browser_text());
-        draw_browser_badge(548, y + 20, 56, favorite_entries[idx].system, selected);
+    const int left_y0 = 92;
+    for (int row = 0; row < TWO_PANEL_LEFT_ROWS && favorite_group_offset + row < favorite_group_count; row++) {
+        int idx = favorite_group_offset + row;
+        int y = left_y0 + row * 54;
+        int selected = idx == favorite_group_sel;
+        int focused = selected && !favorite_focus_games;
+        if (focused)
+            fill_rect(8, y + 3, left_w - 16, 48, browser_accent(category));
+        else if (selected)
+            fill_rect(8, y + 3, left_w - 16, 48, browser_accent_tint(category));
+        else
+            fill_rect(16, y + 53, left_w - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
+
+        char label[64];
+        truncate_to_fit(font_body, favorite_group_label(idx), label, sizeof(label), 190);
+        draw_text(font_body, label, 18, y + 16,
+                  focused ? browser_dark_text()
+                          : selected ? browser_accent_text(category) : browser_text());
+        char count[12];
+        snprintf(count, sizeof(count), "%d", favorite_group_entry_count(idx));
+        draw_text(font_small, count, 242 - text_w(font_small, count), y + 18,
+                  focused ? browser_dark_text() : browser_dim());
     }
-    draw_browser_more(0, 414, SCREEN_W, favorite_count, favorite_offset,
+    if (favorite_group_count > TWO_PANEL_LEFT_ROWS)
+        draw_browser_more(0, 421, left_w, favorite_group_count, favorite_group_offset,
+                          TWO_PANEL_LEFT_ROWS, category);
+
+    int visible_count = favorite_group_entry_count(favorite_group_sel);
+    char group_header[80];
+    snprintf(group_header, sizeof(group_header), "%s / %d",
+             favorite_group_label(favorite_group_sel), visible_count);
+    char header_fit[80];
+    truncate_to_fit(font_small, group_header, header_fit, sizeof(header_fit),
+                    SCREEN_W - left_w - 36);
+    draw_text(font_small, header_fit, left_w + 18, 65, browser_secondary());
+
+    if (favorite_sel < favorite_offset) favorite_offset = favorite_sel;
+    if (favorite_sel >= favorite_offset + BROWSER_ROWS)
+        favorite_offset = favorite_sel - BROWSER_ROWS + 1;
+
+    for (int row = 0; row < BROWSER_ROWS && favorite_offset + row < visible_count; row++) {
+        int idx = favorite_entry_index_at(favorite_group_sel, favorite_offset + row);
+        if (idx < 0) continue;
+        int y = BROWSER_LIST_Y0 + row * BROWSER_LIST_ROW_H;
+        int selected = favorite_focus_games && favorite_offset + row == favorite_sel;
+        if (selected)
+            fill_rect(left_w + 8, y + 3, SCREEN_W - left_w - 16, 56, browser_accent(category));
+        else
+            fill_rect(left_w + 16, y + 61, SCREEN_W - left_w - 32, 1,
+                      browser_rgb(0x1E, 0x21, 0x28));
+
+        char title[240];
+        truncate_to_fit(font_body, favorite_entries[idx].label, title, sizeof(title),
+                        SCREEN_W - left_w - 36);
+        draw_text(font_body, title, left_w + 18, y + 20,
+                  selected ? browser_dark_text() : browser_text());
+    }
+    draw_browser_more(left_w, 414, SCREEN_W - left_w, visible_count, favorite_offset,
                       BROWSER_ROWS, category);
 }
 
@@ -5446,17 +5575,53 @@ static void on_favorites_key(SDLKey k) {
     if (k == BTN_MENU) { open_browser_category(4); return; }
     if (favorite_count <= 0) return;
 
+    if (!favorite_focus_games) {
+        int before = favorite_group_sel;
+        if (k == BTN_UP)
+            favorite_group_sel = (favorite_group_sel - 1 + favorite_group_count) % favorite_group_count;
+        if (k == BTN_DOWN)
+            favorite_group_sel = (favorite_group_sel + 1) % favorite_group_count;
+        if (k == BTN_L2)
+            favorite_group_sel = favorite_group_sel - TWO_PANEL_LEFT_ROWS < 0
+                               ? 0 : favorite_group_sel - TWO_PANEL_LEFT_ROWS;
+        if (k == BTN_R2)
+            favorite_group_sel = favorite_group_sel + TWO_PANEL_LEFT_ROWS >= favorite_group_count
+                               ? favorite_group_count - 1 : favorite_group_sel + TWO_PANEL_LEFT_ROWS;
+        if (favorite_group_sel != before) {
+            favorite_sel = 0;
+            favorite_offset = 0;
+            play_move();
+        }
+        if ((k == BTN_A || k == BTN_RIGHT) && favorite_group_entry_count(favorite_group_sel) > 0) {
+            favorite_focus_games = 1;
+            favorite_sel = 0;
+            favorite_offset = 0;
+            play_select();
+        }
+        return;
+    }
+
+    int visible_count = favorite_group_entry_count(favorite_group_sel);
+    if (visible_count <= 0) {
+        favorite_focus_games = 0;
+        return;
+    }
     int before = favorite_sel;
-    if (k == BTN_UP)   favorite_sel = (favorite_sel - 1 + favorite_count) % favorite_count;
-    if (k == BTN_DOWN) favorite_sel = (favorite_sel + 1) % favorite_count;
+    if (k == BTN_UP)   favorite_sel = (favorite_sel - 1 + visible_count) % visible_count;
+    if (k == BTN_DOWN) favorite_sel = (favorite_sel + 1) % visible_count;
     if (k == BTN_L2)
         favorite_sel = favorite_sel - BROWSER_ROWS < 0 ? 0 : favorite_sel - BROWSER_ROWS;
     if (k == BTN_R2)
-        favorite_sel = favorite_sel + BROWSER_ROWS >= favorite_count
-                       ? favorite_count - 1 : favorite_sel + BROWSER_ROWS;
+        favorite_sel = favorite_sel + BROWSER_ROWS >= visible_count
+                       ? visible_count - 1 : favorite_sel + BROWSER_ROWS;
     if (favorite_sel != before) play_move();
 
-    PlayEntry entry = favorite_entries[favorite_sel];
+    int entry_idx = favorite_entry_index_at(favorite_group_sel, favorite_sel);
+    if (entry_idx < 0) {
+        favorite_focus_games = 0;
+        return;
+    }
+    PlayEntry entry = favorite_entries[entry_idx];
     if (k == BTN_A) launch_entry(&entry);
     if (k == BTN_Y) {
         toggle_favorite(entry.label, entry.rompath, entry.launch);
@@ -5465,6 +5630,10 @@ static void on_favorites_key(SDLKey k) {
     if (k == BTN_X)
         enter_game_options(entry.label, entry.rompath, entry.launch,
                            entry.system, STATE_FAVORITES);
+    if (k == BTN_B || k == BTN_LEFT) {
+        favorite_focus_games = 0;
+        play_back();
+    }
 }
 
 static void on_apps_key(SDLKey k) {
