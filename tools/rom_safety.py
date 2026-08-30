@@ -54,7 +54,8 @@ def load_gamelist_tree(path: Path) -> ET.ElementTree:
     if not path.exists():
         return ET.ElementTree(ET.Element("gameList"))
     try:
-        return ET.parse(path)
+        parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+        return ET.parse(path, parser=parser)
     except (ET.ParseError, OSError) as exc:
         raise GamelistError(f"refusing to overwrite malformed gamelist {path}: {exc}") from exc
 

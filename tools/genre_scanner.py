@@ -301,6 +301,7 @@ class App(tk.Tk):
                 continue
             root = tree.getroot()
             existing = index_games(root)
+            changed = False
 
             for rom in roms:
                 key = rom.name
@@ -328,13 +329,19 @@ class App(tk.Tk):
                     ET.SubElement(game, "name").text = title
                     ET.SubElement(game, "genre").text = genre
                     existing[key] = game
+                    changed = True
                 else:
                     genre_el = game.find("genre")
                     if genre_el is None:
                         genre_el = ET.SubElement(game, "genre")
-                    genre_el.text = genre
+                        genre_el.text = genre
+                        changed = True
+                    elif genre_el.text != genre:
+                        genre_el.text = genre
+                        changed = True
 
-            write_xml_atomic(tree, gamelist_path)
+            if changed:
+                write_xml_atomic(tree, gamelist_path)
 
         # Apply manual overrides
         self._log_line("\nApplying manual genre fixes...")

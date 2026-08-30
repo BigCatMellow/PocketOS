@@ -151,6 +151,31 @@ class RomToolSafetyTests(unittest.TestCase):
             self.assertIn("Puzzle", result)
             self.assertTrue(gamelist.with_name("miyoogamelist.xml.bak").is_file())
 
+    def test_standalone_scanner_leaves_unchanged_gamelist_byte_for_byte(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            system = root / "GBA"
+            system.mkdir()
+            (system / "Example.gba").write_bytes(b"rom")
+            gamelist = system / "miyoogamelist.xml"
+            original = (
+                b'<gameList><!-- user note --><game><path>./Example.gba</path>'
+                b'<name>Example</name><genre>Action</genre><image>./Img.png</image>'
+                b'</game></gameList>'
+            )
+            gamelist.write_bytes(original)
+            db = root / "db.sqlite"
+            db.touch()
+            scanner = genre_scanner.App.__new__(genre_scanner.App)
+            scanner.after = lambda *_args, **_kwargs: None
+            scanner._log_line = lambda _message: None
+            scanner._scan_done = lambda: None
+            with patch("tools.genre_scanner.db_lookup") as lookup:
+                scanner._scan(root, db)
+            self.assertEqual(original, gamelist.read_bytes())
+            self.assertFalse(gamelist.with_name("miyoogamelist.xml.bak").exists())
+            lookup.assert_not_called()
+
 class RomImporterUiSafetyTests(unittest.TestCase):
     def test_variant_analysis_is_truthfully_non_destructive_and_tk_state_is_captured(self):
         source = (Path(__file__).resolve().parents[1] / "tools" / "rom_importer.py").read_text()
