@@ -98,7 +98,7 @@ extern void Mix_ChannelFinished(void (*channel_finished)(int channel));
 #define BROWSER_FOOTER_H 40
 #define BROWSER_BODY_H   (SCREEN_H - BROWSER_HEADER_H - BROWSER_FOOTER_H)
 #define BROWSER_ROWS     5
-#define LIBRARY_SYS_ROWS 6
+#define TWO_PANEL_LEFT_ROWS 6
 #define SETTINGS_SECTION_H 24
 #define SETTINGS_ROW_H     56
 
@@ -3989,7 +3989,7 @@ static void draw_browser_more(int x, int y, int w, int total, int offset,
                      ? browser_accent_text(category) : browser_dim());
 }
 
-static void draw_genre_glyph(const char *label, int x, int y, Uint32 color) {
+__attribute__((unused)) static void draw_genre_glyph(const char *label, int x, int y, Uint32 color) {
     unsigned int hash = 0;
     for (const unsigned char *p = (const unsigned char *)label; *p; p++)
         hash = hash * 33u + *p;
@@ -4079,7 +4079,7 @@ static void draw_most_played_shell(void) {
 
 static void draw_browse_shell(void) {
     int category = 1;
-    const int left_w = 224;
+    const int left_w = 260;
     fill_rect(0, 0, SCREEN_W, SCREEN_H, browser_rgb(0x0E, 0x0F, 0x13));
     draw_browser_header(category);
     draw_browser_footer(state == STATE_BROWSE_GAMES ? 2 : 1, category);
@@ -4098,36 +4098,34 @@ static void draw_browse_shell(void) {
     }
 
     if (browse_genre_sel < browse_genre_off) browse_genre_off = browse_genre_sel;
-    if (browse_genre_sel >= browse_genre_off + BROWSER_ROWS)
-        browse_genre_off = browse_genre_sel - BROWSER_ROWS + 1;
+    if (browse_genre_sel >= browse_genre_off + TWO_PANEL_LEFT_ROWS)
+        browse_genre_off = browse_genre_sel - TWO_PANEL_LEFT_ROWS + 1;
 
     const int left_y0 = 92;
-    for (int row = 0; row < BROWSER_ROWS && browse_genre_off + row < browse_genre_count; row++) {
+    for (int row = 0; row < TWO_PANEL_LEFT_ROWS && browse_genre_off + row < browse_genre_count; row++) {
         int idx = browse_genre_off + row;
-        int y = left_y0 + row * 56;
+        int y = left_y0 + row * 54;
         int selected = idx == browse_genre_sel;
         int focused = selected && state == STATE_BROWSE_CATS;
         if (focused)
-            fill_rect(8, y + 3, left_w - 16, 50, browser_accent(category));
+            fill_rect(8, y + 3, left_w - 16, 48, browser_accent(category));
         else if (selected)
-            fill_rect(8, y + 3, left_w - 16, 50, browser_accent_tint(category));
+            fill_rect(8, y + 3, left_w - 16, 48, browser_accent_tint(category));
         else
-            fill_rect(16, y + 55, left_w - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
+            fill_rect(16, y + 53, left_w - 32, 1, browser_rgb(0x1E, 0x21, 0x28));
 
-        Uint32 glyph = focused ? browser_rgb(0x08, 0x14, 0x0C) : browser_accent(category);
-        draw_genre_glyph(browse_genres[idx].label, 18, y + 22, glyph);
         char label[48];
-        truncate_to_fit(font_body, browse_genres[idx].label, label, sizeof(label), 132);
-        draw_text(font_body, label, 42, y + 18,
+        truncate_to_fit(font_body, browse_genres[idx].label, label, sizeof(label), 190);
+        draw_text(font_body, label, 18, y + 16,
                   focused ? browser_dark_text()
                           : selected ? browser_accent_text(category) : browser_text());
         char count[12];
         snprintf(count, sizeof(count), "%d", browse_genres[idx].count);
-        draw_text(font_small, count, 205 - text_w(font_small, count), y + 20,
+        draw_text(font_small, count, 242 - text_w(font_small, count), y + 18,
                   focused ? browser_dark_text() : browser_dim());
     }
-    draw_browser_more(0, 402, left_w, browse_genre_count, browse_genre_off,
-                      BROWSER_ROWS, category);
+    draw_browser_more(0, 421, left_w, browse_genre_count, browse_genre_off,
+                      TWO_PANEL_LEFT_ROWS, category);
 
     BrowseGenre *genre = &browse_genres[browse_genre_sel];
     char genre_header[80];
@@ -4189,11 +4187,11 @@ static void draw_library_shell(void) {
         draw_text(font_small, "LIBRARY LIMIT REACHED — SOME ENTRIES HIDDEN", 18, 78, browser_accent_text(category));
 
     if (sys_sel < sys_offset) sys_offset = sys_sel;
-    if (sys_sel >= sys_offset + LIBRARY_SYS_ROWS)
-        sys_offset = sys_sel - LIBRARY_SYS_ROWS + 1;
+    if (sys_sel >= sys_offset + TWO_PANEL_LEFT_ROWS)
+        sys_offset = sys_sel - TWO_PANEL_LEFT_ROWS + 1;
 
     const int left_y0 = 92;
-    for (int row = 0; row < LIBRARY_SYS_ROWS && sys_offset + row < sys_count; row++) {
+    for (int row = 0; row < TWO_PANEL_LEFT_ROWS && sys_offset + row < sys_count; row++) {
         int idx = sys_offset + row;
         int y = left_y0 + row * 54;
         int selected = idx == sys_sel;
@@ -4216,9 +4214,9 @@ static void draw_library_shell(void) {
         draw_text(font_small, count, 242 - text_w(font_small, count), y + 18,
                   focused ? browser_dark_text() : browser_dim());
     }
-    if (sys_count > LIBRARY_SYS_ROWS)
+    if (sys_count > TWO_PANEL_LEFT_ROWS)
         draw_browser_more(0, 421, left_w, sys_count, sys_offset,
-                          LIBRARY_SYS_ROWS, category);
+                          TWO_PANEL_LEFT_ROWS, category);
 
     if (game_sel < game_offset) game_offset = game_sel;
     if (game_sel >= game_offset + BROWSER_ROWS)
@@ -5839,11 +5837,11 @@ static void on_systems_key(SDLKey k) {
         load_games(sys_sel);
     }
     if (k == BTN_L2) {
-        sys_sel = (sys_sel - LIBRARY_SYS_ROWS < 0) ? 0 : sys_sel - LIBRARY_SYS_ROWS;
+        sys_sel = (sys_sel - TWO_PANEL_LEFT_ROWS < 0) ? 0 : sys_sel - TWO_PANEL_LEFT_ROWS;
         load_games(sys_sel);
     }
     if (k == BTN_R2) {
-        sys_sel = (sys_sel + LIBRARY_SYS_ROWS >= sys_count) ? sys_count - 1 : sys_sel + LIBRARY_SYS_ROWS;
+        sys_sel = (sys_sel + TWO_PANEL_LEFT_ROWS >= sys_count) ? sys_count - 1 : sys_sel + TWO_PANEL_LEFT_ROWS;
         load_games(sys_sel);
     }
     if (sys_sel != before) play_move();
