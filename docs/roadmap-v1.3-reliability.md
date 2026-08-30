@@ -24,7 +24,7 @@ Final proof: PR CI + ARM build + adversarial data-integrity tests + independent 
 - [x] Harden the Onion shell handoff against backslash/dollar escape interactions.
 - [x] Harden standalone importer/scanner metadata writes and Tk worker boundaries.
 - [x] Refresh Onion runtime backup when a newer stock runtime is patched.
-- [ ] Run real-device 30-minute stress validation with valid memory telemetry.
+- [x] Run real-device 30-minute stress validation with valid memory telemetry (29m59s; RSS 7,464 KB → 8,892 KB after a 9,708 KB cache peak; available memory 75,320–78,176 KB).
 - [ ] Split launcher modules only after behavior is locked by tests; this is maintainability work, not a safety prerequisite.
 
 ## Verification discipline
@@ -33,4 +33,4 @@ Code-side approval evidence must be produced from the current PR head. A green r
 
 ## Current release gate
 
-Code-side safety work in this arc is ready for PR verification. Do not call the roadmap DONE or treat v1.3 as device-validated until the physical Miyoo stress run and required independent review are complete.
+The device-validation gate is satisfied by the recorded Miyoo run. Do not call the roadmap DONE or merge until the required independent review is complete.
