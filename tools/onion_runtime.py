@@ -161,11 +161,14 @@ def install_runtime_hook(sd_root: Path) -> bool:
     if patched == original:
         return False
     backup = Path(sd_root) / BACKUP_REL
-    # This call is patching a stock/unmanaged runtime, so it is the most current
-    # rollback source. Refresh atomically instead of retaining a stale Onion copy.
-    backup_tmp = backup.with_name(f".{backup.name}.installing")
-    shutil.copy2(runtime, backup_tmp)
-    os.replace(backup_tmp, backup)
+    managed = BEGIN_MARKER in original or END_MARKER in original
+    if not managed:
+        # A stock/unmanaged runtime is the most current rollback source. Refresh
+        # it atomically, but never replace that recovery copy during a managed
+        # hook upgrade.
+        backup_tmp = backup.with_name(f".{backup.name}.installing")
+        shutil.copy2(runtime, backup_tmp)
+        os.replace(backup_tmp, backup)
     _atomic_write(runtime, patched)
     return True
 

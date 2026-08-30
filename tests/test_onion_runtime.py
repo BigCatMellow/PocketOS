@@ -3,7 +3,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import tools.onion_runtime as onion_runtime
 from tools.onion_runtime import (
     BACKUP_REL,
     BEGIN_MARKER,
@@ -176,6 +178,17 @@ class RuntimeBehaviorTests(unittest.TestCase):
         restored = self.runtime.read_text(encoding="utf-8")
         self.assertIn("printf second", restored)
         self.assertNotIn("printf first", restored)
+
+    def test_managed_hook_upgrade_preserves_stock_runtime_backup(self):
+        install_runtime_hook(self.root)
+        backup = self.root / BACKUP_REL
+        stock_backup = backup.read_text(encoding="utf-8")
+
+        with patch.object(onion_runtime, "MANAGED_BLOCK", onion_runtime.MANAGED_BLOCK + "# diagnostic upgrade\n"):
+            self.assertTrue(install_runtime_hook(self.root))
+
+        self.assertEqual(stock_backup, backup.read_text(encoding="utf-8"))
+        self.assertIn("# diagnostic upgrade", self.runtime.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
