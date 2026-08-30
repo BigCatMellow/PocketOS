@@ -4157,9 +4157,9 @@ static void draw_browse_shell(void) {
             title_x += 14;
         }
         char title[240];
-        truncate_to_fit(font_game, browse_game_pool[idx].title, title, sizeof(title),
+        truncate_to_fit(font_body, browse_game_pool[idx].title, title, sizeof(title),
                         568 - title_x);
-        draw_text(font_game, title, title_x, y + 15,
+        draw_text(font_body, title, title_x, y + 20,
                   selected ? browser_dark_text() : browser_text());
         draw_browser_badge(580, y + 20, 44, browse_game_pool[idx].system, selected);
     }
@@ -4248,9 +4248,9 @@ static void draw_library_shell(void) {
             title_x += 14;
         }
         char title[240];
-        truncate_to_fit(font_game, games[idx].name, title, sizeof(title),
+        truncate_to_fit(font_body, games[idx].name, title, sizeof(title),
                         SCREEN_W - title_x - 18);
-        draw_text(font_game, title, title_x, y + 15,
+        draw_text(font_body, title, title_x, y + 20,
                   selected ? browser_dark_text() : browser_text());
     }
     draw_browser_more(left_w, 414, SCREEN_W - left_w, game_count, game_offset,

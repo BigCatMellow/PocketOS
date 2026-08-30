@@ -63,8 +63,12 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("left_y0 + row * 54", library)
         self.assertIn("draw_text(font_body, label, 18", browse)
         self.assertIn("draw_text(font_body, label, 18", library)
-        self.assertIn("draw_text(font_game", browse)
-        self.assertIn("draw_text(font_game", library)
+        self.assertIn("truncate_to_fit(font_body, browse_game_pool[idx].title", browse)
+        self.assertIn("draw_text(font_body, title, title_x, y + 20", browse)
+        self.assertNotIn("font_game", browse)
+        self.assertIn("truncate_to_fit(font_body, games[idx].name", library)
+        self.assertIn("draw_text(font_body, title, title_x, y + 20", library)
+        self.assertNotIn("font_game", library)
 
     def test_library_uses_familiar_compact_system_names(self):
         for compact in ("NES", "SNES", "GB", "GBC", "GBA", "Genesis", "PS1"):
