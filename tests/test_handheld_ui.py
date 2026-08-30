@@ -98,6 +98,7 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("favorite_entry_index_at", favorites)
         self.assertIn("favorite_focus_games ? 8 : 7", favorites)
         self.assertNotIn("draw_browser_badge", favorites)
+        self.assertNotIn("FAVORITE_GROUP_ALL", self.source)
         self.assertIn("if (!favorite_focus_games)", handler)
         self.assertIn("(k == BTN_A || k == BTN_RIGHT)", handler)
         self.assertIn("favorite_focus_games = 1", handler)

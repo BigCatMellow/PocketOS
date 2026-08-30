@@ -361,9 +361,8 @@ static int favorite_sel = 0;
 static int favorite_offset = 0;
 
 /* Favorites remain owned by Onion's line-delimited favourite.json.  These
-   groups are an in-memory navigation view only: All, known systems, Other. */
-#define MAX_FAVORITE_GROUPS (MAX_SYSTEMS + 2)
-#define FAVORITE_GROUP_ALL   -1
+   groups are an in-memory navigation view only: known systems and Other. */
+#define MAX_FAVORITE_GROUPS (MAX_SYSTEMS + 1)
 #define FAVORITE_GROUP_OTHER -2
 typedef struct {
     int system_idx;  /* index into systems, or FAVORITE_GROUP_* */
@@ -2083,7 +2082,6 @@ static int favorite_entry_system_index(const PlayEntry *entry) {
 
 static void rebuild_favorite_groups(void) {
     favorite_group_count = 0;
-    favorite_groups[favorite_group_count++] = (FavoriteGroup){FAVORITE_GROUP_ALL, favorite_count};
 
     for (int system_idx = 0; system_idx < sys_count; system_idx++) {
         int count = 0;
@@ -2115,8 +2113,7 @@ static int favorite_entry_index_at(int group_idx, int visible_idx) {
     int seen = 0;
     for (int entry_idx = 0; entry_idx < favorite_count; entry_idx++) {
         int entry_system = favorite_entry_system_index(&favorite_entries[entry_idx]);
-        int matches = wanted_system == FAVORITE_GROUP_ALL || entry_system == wanted_system;
-        if (!matches) continue;
+        if (entry_system != wanted_system) continue;
         if (seen++ == visible_idx) return entry_idx;
     }
     return -1;
@@ -2125,7 +2122,6 @@ static int favorite_entry_index_at(int group_idx, int visible_idx) {
 static const char *favorite_group_label(int group_idx) {
     if (group_idx < 0 || group_idx >= favorite_group_count) return "Favorites";
     int system_idx = favorite_groups[group_idx].system_idx;
-    if (system_idx == FAVORITE_GROUP_ALL) return "All";
     if (system_idx == FAVORITE_GROUP_OTHER) return "Other";
     return library_system_name(systems[system_idx].label);
 }
