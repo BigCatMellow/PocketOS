@@ -1337,6 +1337,11 @@ static void log_open(void) {
     fprintf(g_log_fp, "========================================\n");
     log_timestamp(g_log_fp);
     fprintf(g_log_fp, "PocketOS v%s  started\n", POCKETOS_VERSION);
+    const char *runtime_session = getenv("POCKETOS_SESSION_ID");
+    if (runtime_session && runtime_session[0])
+        fprintf(g_log_fp, "runtime session_id: %s\n", runtime_session);
+    else
+        fprintf(g_log_fp, "runtime session_id: unavailable\n");
     fprintf(g_log_fp, "========================================\n");
     fflush(g_log_fp);
 
@@ -3710,50 +3715,87 @@ static void xml_unescape(char *s) {
     *w = '\0';
 }
 
+static void xml_trim(char *s) {
+    char *start = s;
+    while (*start && isspace((unsigned char)*start)) start++;
+    char *end = start + strlen(start);
+    while (end > start && isspace((unsigned char)end[-1])) end--;
+    *end = '\0';
+    if (start != s) memmove(s, start, (size_t)(end - start) + 1);
+}
+
+static void browse_add_game(const char *path, const char *name, const char *genre,
+                            const char *sys_folder) {
+    if (!path[0] || !genre[0]) return;
+    if (browse_game_count >= BROWSE_GAME_MAX) {
+        if (!browse_games_truncated) log_msg("library truncated: browse game limit reached");
+        browse_games_truncated = 1;
+        return;
+    }
+
+    BrowseGame *g = &browse_game_pool[browse_game_count++];
+    copy_truncated(g->title, sizeof(g->title), name[0] ? name : path);
+    copy_truncated(g->system, sizeof(g->system), sys_folder);
+    const char *fname = path;
+    if (fname[0] == '.' && fname[1] == '/') fname += 2;
+    char system_rom_dir[256];
+    if (!path_join(system_rom_dir, sizeof(system_rom_dir), ROMS_ROOT, sys_folder) ||
+        !path_join(g->path, sizeof(g->path), system_rom_dir, fname)) {
+        browse_game_count--;
+        return;
+    }
+    normalize_genre(genre, g->genre, BROWSE_GENRE_LEN);
+    franchise_override(g->title, g->genre, BROWSE_GENRE_LEN);
+}
+
 static void parse_miyoogamelist(const char *xml_path, const char *sys_folder) {
     FILE *f = fopen(xml_path, "r");
     if (!f) return;
-    char line[1024];
-    char cur_path[512] = {0};
-    char cur_name[240] = {0};
-    while (fgets(line, sizeof(line), f)) {
-        char *p, *end;
-        if ((p = strstr(line, "<path>"))) {
-            p += 6; end = strstr(p, "</path>");
-            if (end) { int n = (int)(end-p); if (n > 511) n = 511; strncpy(cur_path, p, n); cur_path[n] = 0; }
+    char cur_path[512] = {0}, cur_name[240] = {0}, cur_genre[128] = {0};
+    int in_game = 0, field = 0;
+    size_t field_len = 0;
+    int ch;
+    while ((ch = fgetc(f)) != EOF) {
+        if (ch != '<') {
+            char *dest = field == 1 ? cur_path : field == 2 ? cur_name : field == 3 ? cur_genre : NULL;
+            size_t cap = field == 1 ? sizeof(cur_path) : field == 2 ? sizeof(cur_name) : sizeof(cur_genre);
+            if (dest && field_len + 1 < cap) dest[field_len++] = (char)ch;
+            continue;
         }
-        if ((p = strstr(line, "<name>"))) {
-            p += 6; end = strstr(p, "</name>");
-            if (end) { int n = (int)(end-p); if (n > 239) n = 239; strncpy(cur_name, p, n); cur_name[n] = 0; xml_unescape(cur_name); }
+
+        char tag[32] = {0};
+        int closing = 0, tag_len = 0;
+        ch = fgetc(f);
+        if (ch == '/') { closing = 1; ch = fgetc(f); }
+        while (ch != EOF && isspace((unsigned char)ch)) ch = fgetc(f);
+        while (ch != EOF && (isalnum((unsigned char)ch) || ch == '_' || ch == '-')) {
+            if (tag_len + 1 < (int)sizeof(tag)) tag[tag_len++] = (char)ch;
+            ch = fgetc(f);
         }
-        if ((p = strstr(line, "<genre>"))) {
-            p += 7; end = strstr(p, "</genre>");
-            if (!end) { cur_path[0] = cur_name[0] = 0; continue; }
-            if (browse_game_count >= BROWSE_GAME_MAX) {
-                if (!browse_games_truncated) log_msg("library truncated: browse game limit reached");
-                browse_games_truncated = 1;
-                cur_path[0] = cur_name[0] = 0;
-                continue;
-            }
-            char raw[128] = {0};
-            int n = (int)(end-p); if (n > 127) n = 127;
-            strncpy(raw, p, n);
-            BrowseGame *g = &browse_game_pool[browse_game_count++];
-            copy_truncated(g->title, sizeof(g->title),
-                           cur_name[0] ? cur_name : cur_path);
-            copy_truncated(g->system, sizeof(g->system), sys_folder);
-            const char *fname = cur_path;
-            if (fname[0] == '.' && fname[1] == '/') fname += 2;
-            char system_rom_dir[256];
-            if (!path_join(system_rom_dir, sizeof(system_rom_dir), ROMS_ROOT, sys_folder) ||
-                !path_join(g->path, sizeof(g->path), system_rom_dir, fname)) {
-                browse_game_count--;
-                cur_path[0] = cur_name[0] = 0;
-                continue;
-            }
-            normalize_genre(raw, g->genre, BROWSE_GENRE_LEN);
-            franchise_override(g->title, g->genre, BROWSE_GENRE_LEN);
-            cur_path[0] = cur_name[0] = 0;
+        while (ch != EOF && ch != '>') ch = fgetc(f);
+        if (!tag[0]) continue;
+
+        if (!closing && strcasecmp(tag, "game") == 0) {
+            in_game = 1; field = 0;
+            cur_path[0] = cur_name[0] = cur_genre[0] = '\0';
+        } else if (closing && strcasecmp(tag, "game") == 0) {
+            if (in_game) browse_add_game(cur_path, cur_name, cur_genre, sys_folder);
+            in_game = 0; field = 0;
+        } else if (in_game && !closing && strcasecmp(tag, "path") == 0) {
+            field = 1; field_len = 0; cur_path[0] = '\0';
+        } else if (in_game && !closing && strcasecmp(tag, "name") == 0) {
+            field = 2; field_len = 0; cur_name[0] = '\0';
+        } else if (in_game && !closing && strcasecmp(tag, "genre") == 0) {
+            field = 3; field_len = 0; cur_genre[0] = '\0';
+        } else if (in_game && closing &&
+                   ((field == 1 && strcasecmp(tag, "path") == 0) ||
+                    (field == 2 && strcasecmp(tag, "name") == 0) ||
+                    (field == 3 && strcasecmp(tag, "genre") == 0))) {
+            char *dest = field == 1 ? cur_path : field == 2 ? cur_name : cur_genre;
+            dest[field_len] = '\0';
+            xml_unescape(dest);
+            xml_trim(dest);
+            field = 0;
         }
     }
     fclose(f);

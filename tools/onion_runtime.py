@@ -30,7 +30,21 @@ MANAGED_BLOCK = """\
         rm -f "$sysdir/pocketos_stress_test_seconds"
     fi
     if [ -x "$sysdir/bin/pocketOS" ] && [ ! -e "$pocketos_fail_flag" ]; then
-        pocketos_log "launch requested stress_seconds=${pocketos_stress_seconds:-0}"
+        mkdir -p "$sysdir/logs"
+        pocketos_session_id="$(date +%s)-$$"
+        pocketos_session_state="$sysdir/logs/pocketos_session.pending"
+        if [ -s "$pocketos_session_state" ]; then
+            # Do not parse or echo stale SD-card content: its presence alone
+            # is evidence that the previous PocketOS process did not return.
+            pocketos_log "previous_session_unclean state=present"
+        fi
+        if printf '%s\\n' "$pocketos_session_id" > "$pocketos_session_state.installing" && \\
+           mv -f "$pocketos_session_state.installing" "$pocketos_session_state"; then
+            pocketos_log "launch requested session_id=$pocketos_session_id stress_seconds=${pocketos_stress_seconds:-0}"
+        else
+            rm -f "$pocketos_session_state.installing"
+            pocketos_log "launch requested session_tracking=unavailable stress_seconds=${pocketos_stress_seconds:-0}"
+        fi
         if echo "$pocketos_stress_seconds" | grep -q '^[1-9][0-9]*$'; then
             # Onion's key monitor uses real button activity for its own sleep
             # timer.  The automated test has no physical presses, so keep the
@@ -41,20 +55,24 @@ MANAGED_BLOCK = """\
                 LD_PRELOAD="$miyoodir/lib/libpadsp.so" \\
                 POCKETOS_STRESS_TEST=1 \\
                 POCKETOS_STRESS_TEST_SECONDS="$pocketos_stress_seconds" \\
+                POCKETOS_SESSION_ID="$pocketos_session_id" \\
                 "$sysdir/bin/pocketOS"
             pocketos_status=$?
             rm -f /tmp/stay_awake
         else
-            PATH="$miyoodir/app:$PATH" \\
+                PATH="$miyoodir/app:$PATH" \\
                 LD_LIBRARY_PATH="$miyoodir/lib:/config/lib:/lib" \\
                 LD_PRELOAD="$miyoodir/lib/libpadsp.so" \\
+                POCKETOS_SESSION_ID="$pocketos_session_id" \\
                 "$sysdir/bin/pocketOS"
             pocketos_status=$?
         fi
+        rm -f "$pocketos_session_state"
+        pocketos_log "PocketOS session_complete session_id=$pocketos_session_id status=$pocketos_status"
         if [ -e /tmp/cmd_to_run.sh ]; then
-            pocketos_log "PocketOS exited with status $pocketos_status; command_handoff=present"
+            pocketos_log "PocketOS exited with status $pocketos_status; session_id=$pocketos_session_id command_handoff=present"
         else
-            pocketos_log "PocketOS exited with status $pocketos_status; command_handoff=absent"
+            pocketos_log "PocketOS exited with status $pocketos_status; session_id=$pocketos_session_id command_handoff=absent"
         fi
         if [ "$pocketos_status" -ne 0 ]; then
             pocketos_log "PocketOS failed with status $pocketos_status; using MainUI for this boot"

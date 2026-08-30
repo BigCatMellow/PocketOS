@@ -40,6 +40,11 @@ change boot behavior.
 **Promotion bar.** Reproduce both a clean exit and an interrupted process in a
 fixture, and prove the classifier never labels a clean session as unclean.
 
+**Status.** Promoted. The runtime creates an atomic pending-session marker
+before launching PocketOS, removes it after the child returns, and reports a
+previous leftover marker without reading its content. Runtime behavior tests
+cover both clean completion and a simulated interrupted prior session.
+
 ## E-03 — Cross-layer handoff correlation
 
 **Observation.** PocketOS and Onion runtime logs currently describe adjacent
@@ -56,6 +61,11 @@ status and handoff presence.
 **Promotion bar.** A behavioral runtime test proves that successful launch,
 normal return without a command, and fail-open fallback produce distinct,
 correlatable records.
+
+**Status.** Promoted. The runtime assigns a timestamp/PID session ID, includes
+it in launch, completion, and command-handoff records, and exports it to
+PocketOS for the opt-in debug log. The ID is diagnostic-only and does not
+change launch behavior or persistent user data.
 
 ## E-04 — Actual display and power-state evidence
 
@@ -93,6 +103,11 @@ genre, and launch path without changing the gamelist.
 
 **Promotion bar.** Select a bounded parser/read-model change only after the
 fixture reproduces a visible mismatch on the supported launcher build.
+
+**Status.** Promoted. Browse now uses a bounded streaming read model rather
+than line-oriented field matching: it collects each `<game>` independently of
+field order or line wrapping, unescapes path/name/genre values, and remains
+strictly read-only.
 
 ## E-06 — Capacity feedback across all lists
 
@@ -222,15 +237,18 @@ the user to remember titles, scroll through unrelated platforms, or maintain a
 second collection format.
 
 **Smallest safe experiment.** In the host fixture, render Favorites as the
-Library-style left pane `All + systems with favorite counts` and a right pane
-of only the selected system's favorites. Start on `All`; retain the current
-favorite launch and remove actions. The existing line-delimited
+Library-style left pane of systems with favorite counts and a right pane of
+only the selected system's favorites. Start on the first available system;
+retain the current favorite launch and remove actions. The existing line-delimited
 `Roms/favourite.json` remains the sole persistent owner.
 
-**Promotion bar.** Prove a D-pad journey can move from `All` to a system,
-launch the same favorite command as today, remove a favorite, and return with
-correct counts. Entries with an unknown launcher-derived system must remain
-visible under `Other`, never disappear.
+**Promotion bar.** Prove a D-pad journey can open a system, launch the same
+favorite command as today, remove a favorite, and return with correct counts.
+Entries with an unknown launcher-derived system must remain visible under
+`Other`, never disappear.
+
+**Status.** Promoted. The UI groups existing favorites in memory by their
+Onion launcher-derived system and preserves the same on-disk JSON format.
 
 ## Current focus
 

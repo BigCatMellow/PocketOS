@@ -126,8 +126,10 @@ class RuntimeBehaviorTests(unittest.TestCase):
         self.assertFalse(self.fail_flag.exists())
         self.assertEqual("pocketos\n", (self.root / "pocketos.log").read_text())
         runtime_log = (self.root / ".tmp_update" / "logs" / "pocketos_runtime.log").read_text()
-        self.assertIn("launch requested stress_seconds=0", runtime_log)
-        self.assertIn("PocketOS exited with status 0; command_handoff=absent", runtime_log)
+        self.assertRegex(runtime_log, r"launch requested session_id=[0-9]+-[0-9]+ stress_seconds=0")
+        self.assertRegex(runtime_log, r"PocketOS session_complete session_id=[0-9]+-[0-9]+ status=0")
+        self.assertRegex(runtime_log, r"PocketOS exited with status 0; session_id=[0-9]+-[0-9]+ command_handoff=absent")
+        self.assertFalse((self.root / ".tmp_update" / "logs" / "pocketos_session.pending").exists())
 
     def test_stress_run_preserves_pocketos_failure_status_for_fail_open(self):
         pocketos = self.root / ".tmp_update" / "bin" / "pocketOS"
@@ -140,9 +142,25 @@ class RuntimeBehaviorTests(unittest.TestCase):
         self.assertTrue(self.fail_flag.exists())
         self.assertEqual("mainui\n", self.mainui_log.read_text())
         runtime_log = (self.root / ".tmp_update" / "logs" / "pocketos_runtime.log").read_text()
-        self.assertIn("launch requested stress_seconds=1", runtime_log)
+        self.assertRegex(runtime_log, r"launch requested session_id=[0-9]+-[0-9]+ stress_seconds=1")
         self.assertIn("PocketOS exited with status 42", runtime_log)
         self.assertIn("PocketOS failed with status 42", runtime_log)
+
+    def test_pending_session_is_reported_before_the_next_launch(self):
+        self._write_executable(
+            self.root / ".tmp_update" / "bin" / "pocketOS",
+            "#!/bin/sh\nexit 0\n",
+        )
+        logs = self.root / ".tmp_update" / "logs"
+        logs.mkdir()
+        (logs / "pocketos_session.pending").write_text("interrupted-session\n", encoding="utf-8")
+        install_runtime_hook(self.root)
+
+        self._run()
+
+        runtime_log = (logs / "pocketos_runtime.log").read_text(encoding="utf-8")
+        self.assertIn("previous_session_unclean state=present", runtime_log)
+        self.assertFalse((logs / "pocketos_session.pending").exists())
 
     def test_file_install_preserves_backup_and_mode(self):
         install_runtime_hook(self.root)

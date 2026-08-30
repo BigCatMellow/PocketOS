@@ -284,6 +284,10 @@ class HandheldUiContractTests(unittest.TestCase):
         self.assertIn("pocketos_stress_test_seconds", runner)
         self.assertIn("Press MENU once to close Terminal", runner)
 
+    def test_debug_log_records_the_runtime_session_when_available(self):
+        self.assertIn('getenv("POCKETOS_SESSION_ID")', self.source)
+        self.assertIn('"runtime session_id: %s\\n"', self.source)
+
     def test_test_center_offers_dpad_presets_without_terminal_typing(self):
         self.assertIn("STATE_TEST_CENTER", self.source)
         self.assertIn('"PocketOS active test - 15 min"', self.source)
