@@ -319,8 +319,10 @@ typedef struct {
 
 static BrowseGame  browse_game_pool[BROWSE_GAME_MAX];
 static int         browse_game_count   = 0;
+static int         browse_games_truncated = 0;
 static BrowseGenre browse_genres[BROWSE_GENRE_MAX];
 static int         browse_genre_count  = 0;
+static int         browse_genres_truncated = 0;
 static int         browse_genre_sel    = 0;
 static int         browse_genre_off    = 0;
 static int         browse_game_sel     = 0;
@@ -328,11 +330,13 @@ static int         browse_game_off     = 0;
 
 static System systems[MAX_SYSTEMS];
 static int    sys_count  = 0;
+static int    systems_truncated = 0;
 static int    sys_sel    = 0;
 static int    sys_offset = 0;
 
 static Game games[MAX_GAMES];
 static int  game_count    = 0;
+static int  games_truncated = 0;
 static int  game_sel      = 0;
 static int  game_offset   = 0;
 static int  games_sys_idx = -1;  /* which system's games are currently loaded */
@@ -704,6 +708,45 @@ static int commit_atomic_file(FILE *f, const char *tmp, const char *path) {
     log_errno_msg("atomic write failed", path);
     unlink(tmp);
     return 0;
+}
+
+static int copy_file_atomic(const char *src, const char *dest) {
+    char tmp[512];
+    if (snprintf(tmp, sizeof(tmp), "%s.tmp.%ld", dest, (long)getpid()) >= (int)sizeof(tmp))
+        return 0;
+    int input = open(src, O_RDONLY);
+    if (input < 0) return 0;
+    int output = open(tmp, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (output < 0) { close(input); return 0; }
+    int ok = 1;
+    char buffer[4096];
+    ssize_t bytes;
+    while ((bytes = read(input, buffer, sizeof(buffer))) > 0) {
+        ssize_t offset = 0;
+        while (offset < bytes) {
+            ssize_t written = write(output, buffer + offset, (size_t)(bytes - offset));
+            if (written <= 0) { ok = 0; break; }
+            offset += written;
+        }
+        if (!ok) break;
+    }
+    int synced = fsync(output) == 0;
+    int closed = close(output) == 0;
+    if (bytes < 0 || !synced || !closed) ok = 0;
+    close(input);
+    if (ok && rename(tmp, dest) == 0) return 1;
+    unlink(tmp);
+    return 0;
+}
+
+static int device_serial_is_safe(const char *serial) {
+    size_t length = 0;
+    if (!serial) return 0;
+    for (const unsigned char *p = (const unsigned char *)serial; *p; p++) {
+        if (!isalnum(*p) && *p != '_' && *p != '-') return 0;
+        if (++length > 48) return 0;
+    }
+    return length > 0;
 }
 
 static int json_write_string(FILE *f, const char *value) {
@@ -1792,6 +1835,7 @@ __attribute__((unused)) static const char *cart_icon(const char *label) {
 
 static void load_systems(void) {
     sys_count = 0;
+    systems_truncated = 0;
     log_msg("load_systems begin");
     log_file_state("emu_root", EMU_ROOT);
     log_file_state("roms_root", ROMS_ROOT);
@@ -1803,7 +1847,7 @@ static void load_systems(void) {
     }
 
     struct dirent *ent;
-    while ((ent = readdir(d)) && sys_count < MAX_SYSTEMS) {
+    while ((ent = readdir(d))) {
         if (ent->d_name[0] == '.') continue;
 
         char emu_dir[256];
@@ -1855,6 +1899,11 @@ static void load_systems(void) {
             continue;
         }
 
+        if (sys_count >= MAX_SYSTEMS) {
+            if (!systems_truncated) log_msg("library truncated: system limit reached");
+            systems_truncated = 1;
+            continue;
+        }
         System *sys = &systems[sys_count++];
         copy_truncated(sys->label,   sizeof(sys->label),   label);
         copy_truncated(sys->emu_dir, sizeof(sys->emu_dir), emu_dir);
@@ -1892,6 +1941,7 @@ static void load_games(int idx) {
     }
 
     game_count  = 0;
+    games_truncated = 0;
     game_sel    = 0;
     game_offset = 0;
 
@@ -1907,7 +1957,7 @@ static void load_games(int idx) {
     }
 
     struct dirent *ent;
-    while ((ent = readdir(d)) && game_count < MAX_GAMES) {
+    while ((ent = readdir(d))) {
         if (ent->d_name[0] == '.') continue;
 
         // Skip directories
@@ -1925,6 +1975,11 @@ static void load_games(int idx) {
         char display[240];
         strip_ext(ent->d_name, display, sizeof(display));
 
+        if (game_count >= MAX_GAMES) {
+            if (!games_truncated) log_msg("library truncated: game limit reached");
+            games_truncated = 1;
+            continue;
+        }
         Game *g = &games[game_count++];
         copy_truncated(g->name, sizeof(g->name), display);
         copy_truncated(g->path, sizeof(g->path), fullpath);
@@ -3563,7 +3618,13 @@ static void parse_miyoogamelist(const char *xml_path, const char *sys_folder) {
         }
         if ((p = strstr(line, "<genre>"))) {
             p += 7; end = strstr(p, "</genre>");
-            if (!end || browse_game_count >= BROWSE_GAME_MAX) { cur_path[0] = cur_name[0] = 0; continue; }
+            if (!end) { cur_path[0] = cur_name[0] = 0; continue; }
+            if (browse_game_count >= BROWSE_GAME_MAX) {
+                if (!browse_games_truncated) log_msg("library truncated: browse game limit reached");
+                browse_games_truncated = 1;
+                cur_path[0] = cur_name[0] = 0;
+                continue;
+            }
             char raw[128] = {0};
             int n = (int)(end-p); if (n > 127) n = 127;
             strncpy(raw, p, n);
@@ -3591,6 +3652,8 @@ static void parse_miyoogamelist(const char *xml_path, const char *sys_folder) {
 static void load_browse_data(void) {
     browse_game_count  = 0;
     browse_genre_count = 0;
+    browse_games_truncated = 0;
+    browse_genres_truncated = 0;
 
     DIR *d = opendir(ROMS_ROOT);
     if (!d) return;
@@ -3611,7 +3674,11 @@ static void load_browse_data(void) {
     const char *prev = "";
     for (int i = 0; i < browse_game_count; i++) {
         if (strcmp(browse_game_pool[i].genre, prev) != 0) {
-            if (browse_genre_count >= BROWSE_GENRE_MAX) break;
+            if (browse_genre_count >= BROWSE_GENRE_MAX) {
+                browse_genres_truncated = 1;
+                log_msg("library truncated: browse genre limit reached");
+                break;
+            }
             BrowseGenre *bg = &browse_genres[browse_genre_count++];
             strncpy(bg->label, browse_game_pool[i].genre, BROWSE_GENRE_LEN-1);
             bg->label[BROWSE_GENRE_LEN-1] = '\0';
@@ -4101,10 +4168,13 @@ static void draw_library_shell(void) {
 
     draw_text(font_small, "SYSTEMS", 18, 65, browser_dim());
     char total[32];
-    snprintf(total, sizeof(total), "%d GAMES", library_total_games());
+    snprintf(total, sizeof(total), "%d%s GAMES", library_total_games(),
+             (systems_truncated || games_truncated) ? "+" : "");
     draw_text(font_small, total, left_w - 18 - text_w(font_small, total), 65, browser_dim());
     draw_text(font_small, sys_count > 0 ? system_full_name(systems[sys_sel].label) : "GAMES",
               left_w + 18, 65, browser_secondary());
+    if (systems_truncated || games_truncated || browse_games_truncated || browse_genres_truncated)
+        draw_text(font_small, "LIBRARY LIMIT REACHED — SOME ENTRIES HIDDEN", 18, 78, browser_accent_text(category));
 
     if (sys_sel < sys_offset) sys_offset = sys_sel;
     if (sys_sel >= sys_offset + LIBRARY_SYS_ROWS)
@@ -6404,14 +6474,14 @@ int main(int argc, char *argv[]) {
         char sn[64] = {0};
         FILE *snf = fopen("/tmp/deviceSN", "r");
         if (snf) { if (!fgets(sn, sizeof(sn), snf)) sn[0] = '\0'; fclose(snf);
-            char *nl = strchr(sn,'\n'); if (nl) *nl='\0'; }
-        if (sn[0]) {
-            char cmd[512];
-            snprintf(cmd, sizeof(cmd),
-                "cp -f " POCKETOS_ROOT "/system.json "
-                SYSDIR "/config/system/%s.json", sn);
-            int rc = system(cmd);
-            if (rc != 0) log_int("persist settings rc", rc);
+            sn[strcspn(sn, "\r\n")] = '\0'; }
+        if (sn[0] && device_serial_is_safe(sn)) {
+            char dest[512];
+            if (snprintf(dest, sizeof(dest), SYSDIR "/config/system/%s.json", sn) >= (int)sizeof(dest) ||
+                !copy_file_atomic(POCKETOS_ROOT "/system.json", dest))
+                log_msg("persist settings copy failed");
+        } else if (sn[0]) {
+            log_msg("persist settings rejected unsafe device serial");
         }
     }
 
