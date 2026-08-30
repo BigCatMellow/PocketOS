@@ -208,6 +208,30 @@ non-destructive membership rule.
 **Promotion bar.** Choose a single data owner and an import/export-compatible
 format before any collection becomes persistent user data.
 
+## E-12 — System-scoped Favorites
+
+**Area.** Frontend / existing favorite data
+
+**Observation.** Every loaded favorite already has a system derived from its
+Onion launcher path, but Favorites is rendered as one alphabetical list with a
+small system badge. The Library already has a familiar two-pane system → game
+interaction model.
+
+**Value.** A large Favorites list can be navigated by system without requiring
+the user to remember titles, scroll through unrelated platforms, or maintain a
+second collection format.
+
+**Smallest safe experiment.** In the host fixture, render Favorites as the
+Library-style left pane `All + systems with favorite counts` and a right pane
+of only the selected system's favorites. Start on `All`; retain the current
+favorite launch and remove actions. The existing line-delimited
+`Roms/favourite.json` remains the sole persistent owner.
+
+**Promotion bar.** Prove a D-pad journey can move from `All` to a system,
+launch the same favorite command as today, remove a favorite, and return with
+correct counts. Entries with an unknown launcher-derived system must remain
+visible under `Other`, never disappear.
+
 ## Current focus
 
 PocketOS remains an Onion-integrated launcher. These discoveries are intended
