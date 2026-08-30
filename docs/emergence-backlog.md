@@ -204,6 +204,10 @@ PR-like environment and measure duration, dependencies, and artifact size.
 and it remains a distinct behavioral/render check rather than duplicate
 ceremony.
 
+**Status.** Promoted. Local host rendering completes in roughly ten seconds
+and uses the existing release dependency set. Normal CI now runs the same
+environment check and renderer; release still publishes its render artifact.
+
 ## E-11 — Intentional collections beyond one Favorites list
 
 **Area.** User-facing product behavior

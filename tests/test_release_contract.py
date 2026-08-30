@@ -6,6 +6,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_normal_ci_renders_the_ui_before_release(self):
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        self.assertIn("ui-render:", workflow)
+        self.assertIn("python3 tools/check_environment.py --profile host-render --json", workflow)
+        self.assertIn("python3 tools/render_handheld_ui.py --output build/handheld-ui-ci", workflow)
+
     def test_release_builds_complete_onedir_installer(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text()
         self.assertIn("python3 tools/check_environment.py --profile ci-arm --json", workflow)

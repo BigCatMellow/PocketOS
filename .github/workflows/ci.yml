@@ -33,3 +33,23 @@ jobs:
             -v "$PWD:/root/workspace" \
             aemiii91/miyoomini-toolchain@sha256:e5123590ad75d27f0f4c91196e3119a255cad45f3ae15243e29a8e0a2ec50132 \
             bash -l -c "source /root/.bashrc; make -C /root/workspace/src/pocketOS clean all"
+
+  ui-render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install host render dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc \
+            imagemagick \
+            libsdl1.2-dev \
+            libsdl-image1.2-dev \
+            libsdl-ttf2.0-dev \
+            libsqlite3-dev \
+            zlib1g-dev
+      - name: Check host render environment
+        run: python3 tools/check_environment.py --profile host-render --json
+      - name: Render primary and secondary UI views
+        run: python3 tools/render_handheld_ui.py --output build/handheld-ui-ci
