@@ -210,6 +210,7 @@ static void format_playtime_compact(int secs, char *out, int outlen);
 static void draw_secondary_frame(const char *parent, const char *title,
                                  const char *meta);
 static void draw_secondary_footer(int mode);
+static void render(void);
 
 // Named color constants (resolved at runtime)
 static Uint32 C_BG, C_BAR, C_SEP, C_SEL, C_PANEL_HDR;
@@ -251,6 +252,7 @@ typedef enum {
     STATE_BROWSE_GAMES,
     STATE_INFO_PANEL,
     STATE_GAME_OPTIONS,
+    STATE_TEST_CENTER,
 } State;
 
 static void enter_game_options(const char *name, const char *path,
@@ -263,6 +265,8 @@ static State info_panel_back = STATE_SETTINGS;
 static int home_section    = 0;       /* 0=BROWSE(default)  1=PLAY(incl. Library)  2=SYSTEM */
 static int home_sel_sec[3] = {0,0,0}; /* per-section cursor */
 static int browser_category = 0;      /* Most Played, Browse, Library, Favorites, Settings */
+static int test_center_sel = 0;
+static char test_center_notice[96] = "Choose a timed test. No Terminal typing needed.";
 
 // ── Data structures ───────────────────────────────────────────────────────────
 
@@ -530,6 +534,7 @@ static AppEntry APP_ENTRIES[] = {
     { "Search",          "app_search.png",   "cd /mnt/SDCARD/App/Search; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Settings",        "settings.png",     "internal-settings" },
     { "Terminal",        "app_terminal.png", "cd /mnt/SDCARD/App/Terminal; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
+    { "Test Center",     "app_activity.png", "cd '/mnt/SDCARD/App/PocketOS Test Center'; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Themes",          "themes.png",       "cd /mnt/SDCARD/App/ThemeSwitcher; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Tools",           "tools.png",        "cd /mnt/SDCARD/App/Commander_Italic; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
     { "Tweaks",          "app_tweaks.png",   "cd /mnt/SDCARD/App/Tweaks; chmod a+x ./launch.sh; LD_PRELOAD=/mnt/SDCARD/miyoo/app/../lib/libpadsp.so ./launch.sh" },
@@ -4534,6 +4539,92 @@ static void draw_secondary_footer(int mode) {
         draw_browser_hint(x, "L2/R2", "PAGE", browser_accent(4));
 }
 
+typedef struct {
+    const char *label;
+    const char *detail;
+    int minutes;
+    int stock_onion;
+} TestCenterEntry;
+
+static const TestCenterEntry TEST_CENTER_ENTRIES[] = {
+    { "PocketOS test - 15 min", "Cycles PocketOS screens; no games or settings changes.", 15, 0 },
+    { "PocketOS test - 30 min", "Recommended first launcher memory check.",              30, 0 },
+    { "PocketOS test - 60 min", "Longer launcher stability check.",                       60, 0 },
+    { "Onion baseline - 15 min", "Automatic stock MainUI idle baseline.",                 15, 1 },
+    { "Onion baseline - 30 min", "Recommended first stock-Onion baseline.",              30, 1 },
+    { "Onion baseline - 60 min", "Longer automatic stock-Onion baseline.",               60, 1 },
+};
+#define TEST_CENTER_COUNT ((int)(sizeof(TEST_CENTER_ENTRIES) / sizeof(TEST_CENTER_ENTRIES[0])))
+
+static int write_test_seconds(int minutes) {
+    char tmp_path[512];
+    char final_path[512];
+    snprintf(tmp_path, sizeof(tmp_path), "%s/pocketos_stress_test_seconds.tmp", SYSDIR);
+    snprintf(final_path, sizeof(final_path), "%s/pocketos_stress_test_seconds", SYSDIR);
+    FILE *f = fopen(tmp_path, "w");
+    if (!f) return 0;
+    if (fprintf(f, "%d\n", minutes * 60) < 0 || fclose(f) != 0) {
+        unlink(tmp_path);
+        return 0;
+    }
+    return rename(tmp_path, final_path) == 0;
+}
+
+static void draw_test_center(void) {
+    draw_secondary_frame("Apps", "Test Center", "Automated launcher and stock-Onion baseline tests");
+    const int row_h = 48;
+    const int start_y = 96;
+    for (int i = 0; i < TEST_CENTER_COUNT; i++) {
+        const int y = start_y + i * row_h;
+        const int selected = i == test_center_sel;
+        if (selected)
+            fill_rrect(16, y, SCREEN_W - 32, row_h - 4, 6, browser_accent(4));
+        SDL_Color title = selected ? browser_dark_text() : browser_text();
+        SDL_Color detail = selected ? browser_dark_text() : browser_secondary();
+        draw_text(font_body, TEST_CENTER_ENTRIES[i].label, 30, y + 5, title);
+        draw_text(font_small, TEST_CENTER_ENTRIES[i].detail, 30, y + 28, detail);
+    }
+    draw_text_center(font_small, test_center_notice, 0, SCREEN_W, 402, browser_secondary());
+    draw_secondary_footer(0);
+}
+
+static void queue_test_center_entry(const TestCenterEntry *entry) {
+    if (!entry->stock_onion) {
+        mkdir(SYSDIR "/logs", 0755);
+        FILE *log = fopen(HEALTH_LOG_PATH, "a");
+        if (log) fclose(log);
+        if (write_test_seconds(entry->minutes)) {
+            snprintf(test_center_notice, sizeof(test_center_notice),
+                     "Queued. PocketOS starts after this screen closes.");
+        } else {
+            snprintf(test_center_notice, sizeof(test_center_notice), "Could not queue the PocketOS test.");
+            return;
+        }
+    } else {
+        char command[256];
+        snprintf(command, sizeof(command), "sh %s/onion-baseline-monitor.sh start %d",
+                 POCKETOS_ROOT, entry->minutes);
+        if (system(command) != 0) {
+            snprintf(test_center_notice, sizeof(test_center_notice), "Could not start the Onion baseline.");
+            return;
+        }
+        FILE *fail_flag = fopen("/tmp/pocketos_failed", "w");
+        if (fail_flag) fclose(fail_flag);
+        snprintf(test_center_notice, sizeof(test_center_notice),
+                 "Baseline started. Stock Onion opens after this screen closes.");
+    }
+    render();
+    SDL_Delay(700);
+    running = 0;
+}
+
+static void on_test_center_key(SDLKey k) {
+    if (k == BTN_UP && test_center_sel > 0) test_center_sel--;
+    if (k == BTN_DOWN && test_center_sel < TEST_CENTER_COUNT - 1) test_center_sel++;
+    if (k == BTN_A) queue_test_center_entry(&TEST_CENTER_ENTRIES[test_center_sel]);
+    if (k == BTN_B || k == BTN_LEFT || k == BTN_MENU) running = 0;
+}
+
 static void app_initials(const char *label, char out[3]) {
     int n = 0;
     int at_word = 1;
@@ -5114,6 +5205,9 @@ static void render(void) {
         break;
     case STATE_GAME_OPTIONS:
         draw_game_options();
+        break;
+    case STATE_TEST_CENTER:
+        draw_test_center();
         break;
     }
     draw_screenshot_toast();
@@ -6117,7 +6211,9 @@ int main(int argc, char *argv[]) {
 
     /* Host smoke tests can select a view without injecting key events. */
     const char *start_screen = getenv("POCKETOS_START_SCREEN");
-    if (start_screen && strcmp(start_screen, "browse") == 0) {
+    if (start_screen && strcmp(start_screen, "test-center") == 0) {
+        browser_category = 4; state = STATE_TEST_CENTER;
+    } else if (start_screen && strcmp(start_screen, "browse") == 0) {
         browser_category = 1; state = STATE_BROWSE_CATS;
     } else if (start_screen && strcmp(start_screen, "library") == 0) {
         browser_category = 2; state = STATE_SYSTEMS;
@@ -6224,6 +6320,7 @@ int main(int argc, char *argv[]) {
                 case STATE_BROWSE_GAMES:  on_browse_games_key(k);  break;
                 case STATE_INFO_PANEL:    on_info_panel_key(k);    break;
                 case STATE_GAME_OPTIONS:  on_game_options_key(k);  break;
+                case STATE_TEST_CENTER:   on_test_center_key(k);   break;
                 }
             }
         }

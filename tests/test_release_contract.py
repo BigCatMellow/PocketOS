@@ -30,6 +30,8 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("-name 'PocketOS-GenreScanner-*'", workflow)
         self.assertIn("cp tools/install_runtime.py staging/install-pocketos.py", workflow)
         self.assertIn("cp tools/onion_runtime.py staging/onion_runtime.py", workflow)
+        self.assertIn('cp -r "assets/App/PocketOS Test Center" staging/App/', workflow)
+        self.assertIn('cp -r "assets/App/PocketOS Test Center" payload/App/', workflow)
         self.assertIn("xargs -0 sha256sum > manifest.sha256", workflow)
         self.assertIn("sha256sum -c manifest.sha256", workflow)
         self.assertIn("1980-01-01 00:00:00 UTC", workflow)

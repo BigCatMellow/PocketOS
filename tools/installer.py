@@ -56,6 +56,7 @@ PAYLOAD_HEALTH_REPORT = BASE_DIR / "pocketos-health-report.py"
 PAYLOAD_STRESS_TEST = BASE_DIR / "pocketos-stress-test.sh"
 PAYLOAD_ONION_MONITOR = BASE_DIR / "onion-baseline-monitor.sh"
 PAYLOAD_COMPARISON_MONITOR = BASE_DIR / "launcher-comparison-monitor.sh"
+PAYLOAD_TEST_CENTER_APP = BASE_DIR / "App" / "PocketOS Test Center"
 RUNTIME_REL = Path(".tmp_update") / "runtime.sh"
 
 ONION_URL   = "https://github.com/OnionUI/Onion/releases/latest"
@@ -162,6 +163,7 @@ POCKETOS_TRANSACTION_PATHS = (
     Path("pocketos-stress-test.sh"),
     Path("onion-baseline-monitor.sh"),
     Path("launcher-comparison-monitor.sh"),
+    Path("App/PocketOS Test Center"),
     Path(".tmp_update/runtime.sh"),
     Path(".tmp_update/runtime.sh.before-pocketos"),
 )
@@ -236,7 +238,10 @@ class _InstallTransaction:
 
 def _remove_owned_file(path: Path, log, label: str):
     if path.exists() or path.is_symlink():
-        path.unlink()
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
         log(f"  Removed {label}")
 
 
@@ -279,6 +284,8 @@ def install_from_dir(src: Path, sd: Path, log):
     stress_dest = sd / "pocketos-stress-test.sh"
     onion_monitor_dest = sd / "onion-baseline-monitor.sh"
     comparison_monitor_dest = sd / "launcher-comparison-monitor.sh"
+    test_center_dest = sd / "App" / "PocketOS Test Center"
+    test_center_src = src / "App" / "PocketOS Test Center"
     if not bin_src.exists():
         raise FileNotFoundError(f"Binary not found: {bin_src}")
     if not res_src.is_dir():
@@ -301,6 +308,9 @@ def install_from_dir(src: Path, sd: Path, log):
         if PAYLOAD_COMPARISON_MONITOR.is_file():
             _copy_file_atomic(PAYLOAD_COMPARISON_MONITOR, comparison_monitor_dest)
             comparison_monitor_dest.chmod(0o755)
+        if test_center_src.is_dir():
+            _replace_tree(test_center_src, test_center_dest)
+            (test_center_dest / "launch.sh").chmod(0o755)
         log("  Copying PocketOS launcher...")
         _copy_file_atomic(bin_src, bin_dest / "pocketOS")
         (bin_dest / "pocketOS").chmod(0o755)
@@ -337,6 +347,7 @@ def uninstall(sd: Path, log):
             ("launcher-comparison-monitor.sh", "launcher comparison monitor"),
         ):
             _remove_owned_file(sd / filename, log, label)
+        _remove_owned_file(sd / "App" / "PocketOS Test Center", log, "PocketOS Test Center")
     except Exception:
         transaction.rollback()
         raise

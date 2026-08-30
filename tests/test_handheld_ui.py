@@ -71,7 +71,7 @@ class HandheldUiContractTests(unittest.TestCase):
         renderer = (ROOT / "tools" / "render_handheld_ui.py").read_text(encoding="utf-8")
         for screen in (
             "apps", "settings-list", "font", "theme", "device", "about",
-            "appearance", "recent", "options", "rom-info", "save-info",
+            "appearance", "recent", "options", "rom-info", "save-info", "test-center",
         ):
             self.assertIn(f'"{screen}"', renderer)
 
@@ -183,6 +183,20 @@ class HandheldUiContractTests(unittest.TestCase):
         runner = (ROOT / "tools" / "pocketos_stress_test.sh").read_text(encoding="utf-8")
         self.assertIn("pocketos_stress_test_seconds", runner)
         self.assertIn("Press MENU once to close Terminal", runner)
+
+    def test_test_center_offers_dpad_presets_without_terminal_typing(self):
+        self.assertIn("STATE_TEST_CENTER", self.source)
+        self.assertIn('"PocketOS test - 15 min"', self.source)
+        self.assertIn('"PocketOS test - 30 min"', self.source)
+        self.assertIn('"PocketOS test - 60 min"', self.source)
+        self.assertIn('"Onion baseline - 15 min"', self.source)
+        self.assertIn('"Onion baseline - 30 min"', self.source)
+        self.assertIn('"Onion baseline - 60 min"', self.source)
+        self.assertIn('"/tmp/pocketos_failed"', self.source)
+        app_root = ROOT / "assets" / "App" / "PocketOS Test Center"
+        self.assertTrue((app_root / "config.json").is_file())
+        self.assertIn("POCKETOS_START_SCREEN=test-center", (app_root / "launch.sh").read_text())
+        self.assertIn('"Test Center",     "app_activity.png"', self.source)
 
     def test_onion_baseline_monitor_is_separate_and_bounded(self):
         runner = (ROOT / "tools" / "onion_baseline_monitor.sh").read_text(encoding="utf-8")

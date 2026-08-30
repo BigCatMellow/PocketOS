@@ -1,0 +1,6 @@
+{
+  "label": "PocketOS Test Center",
+  "icon": "../../Icons/Default/app/activity.png",
+  "launch": "launch.sh",
+  "description": "Run timed PocketOS or stock-Onion baseline tests"
+}

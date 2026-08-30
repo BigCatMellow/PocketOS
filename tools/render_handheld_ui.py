@@ -22,7 +22,7 @@ THEME_VARIANTS = tuple(path.stem.removeprefix("theme_")
 SCREENS = (
     "most", "browse", "library", "favorites", "settings",
     "apps", "settings-list", "appearance", "font", "theme", "device", "about",
-    "recent", "options", "rom-info", "save-info",
+    "recent", "options", "rom-info", "save-info", "test-center",
 )
 
 SYSTEMS = (

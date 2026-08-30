@@ -50,6 +50,10 @@ class InstallerTests(unittest.TestCase):
         binary.write_bytes(b"arm binary")
         binary.chmod(0o644)
         (payload / ".tmp_update" / "res" / "pocketos" / "theme.json").write_text("{}")
+        app = payload / "App" / "PocketOS Test Center"
+        app.mkdir(parents=True)
+        (app / "config.json").write_text('{"label":"PocketOS Test Center"}')
+        (app / "launch.sh").write_text("#!/bin/sh\n")
         (sd / ".tmp_update").mkdir(parents=True)
         (sd / ".tmp_update" / "onionVersion").mkdir()
         (sd / ".tmp_update" / "onionVersion" / "version.txt").write_text("v4.3.1-1")
@@ -68,11 +72,13 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(b"arm binary", (sd / ".tmp_update" / "bin" / "pocketOS").read_bytes())
             self.assertEqual(0o755, (sd / ".tmp_update" / "bin" / "pocketOS").stat().st_mode & 0o777)
             self.assertTrue((sd / ".tmp_update" / "res" / "pocketos" / "theme.json").is_file())
+            self.assertTrue((sd / "App" / "PocketOS Test Center" / "launch.sh").is_file())
             self.assertIn(BEGIN_MARKER, runtime.read_text())
 
             uninstall(sd, lambda _message: None)
             self.assertFalse((sd / ".tmp_update" / "bin" / "pocketOS").exists())
             self.assertFalse((sd / ".tmp_update" / "res" / "pocketos").exists())
+            self.assertFalse((sd / "App" / "PocketOS Test Center").exists())
             self.assertNotIn(BEGIN_MARKER, runtime.read_text())
 
     def test_manual_release_installer_copies_payload_to_separate_sd_root(self):
@@ -88,6 +94,7 @@ class InstallerTests(unittest.TestCase):
                 "{}",
                 (sd / ".tmp_update" / "res" / "pocketos" / "theme.json").read_text(),
             )
+            self.assertTrue((sd / "App" / "PocketOS Test Center" / "launch.sh").is_file())
 
     def test_updates_preserve_the_active_theme(self):
         with tempfile.TemporaryDirectory() as temp:
