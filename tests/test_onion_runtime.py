@@ -123,6 +123,24 @@ class RuntimeBehaviorTests(unittest.TestCase):
         self.assertFalse(self.mainui_log.exists())
         self.assertFalse(self.fail_flag.exists())
         self.assertEqual("pocketos\n", (self.root / "pocketos.log").read_text())
+        runtime_log = (self.root / ".tmp_update" / "logs" / "pocketos_runtime.log").read_text()
+        self.assertIn("launch requested stress_seconds=0", runtime_log)
+        self.assertIn("PocketOS exited with status 0; command_handoff=absent", runtime_log)
+
+    def test_stress_run_preserves_pocketos_failure_status_for_fail_open(self):
+        pocketos = self.root / ".tmp_update" / "bin" / "pocketOS"
+        self._write_executable(pocketos, "#!/bin/sh\nexit 42\n")
+        (self.root / ".tmp_update" / "pocketos_stress_test_seconds").write_text("1\n")
+        install_runtime_hook(self.root)
+
+        self._run()
+
+        self.assertTrue(self.fail_flag.exists())
+        self.assertEqual("mainui\n", self.mainui_log.read_text())
+        runtime_log = (self.root / ".tmp_update" / "logs" / "pocketos_runtime.log").read_text()
+        self.assertIn("launch requested stress_seconds=1", runtime_log)
+        self.assertIn("PocketOS exited with status 42", runtime_log)
+        self.assertIn("PocketOS failed with status 42", runtime_log)
 
     def test_file_install_preserves_backup_and_mode(self):
         install_runtime_hook(self.root)

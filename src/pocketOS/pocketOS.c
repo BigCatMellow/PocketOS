@@ -447,6 +447,10 @@ static TTF_Font    *font_large = NULL;   // 26pt — home rows, settings rows
 static TTF_Font    *font_small = NULL;   // 14pt — labels, hints, values
 static char         active_font_path[512] = "";
 static int          running = 1;
+/* Set at every intentional main-loop exit. This turns a black-screen report
+   into actionable evidence instead of an ambiguous "exited normally" line. */
+static const char  *g_exit_reason = "startup_failure_or_unclassified";
+static char         g_last_input_key[32] = "none";
 
 #ifdef POCKETOS_ENABLE_AUDIO
 static int audio_ready = 0;
@@ -1332,7 +1336,8 @@ static void log_open(void) {
 
 static void log_close(void) {
     if (!g_log_fp) return;
-    log_msg("PocketOS exiting normally");
+    log_kv("PocketOS exit reason", g_exit_reason);
+    log_msg("PocketOS process cleanup complete");
     fclose(g_log_fp);
     g_log_fp = NULL;
 }
@@ -1389,6 +1394,19 @@ static void log_state_if_changed(int cur) {
             state_name(cur));
     fflush(g_log_fp);
     g_prev_state = cur;
+}
+
+/* Keep the first exit cause: later cleanup must not overwrite the event that
+   actually ended the UI loop. Debug logging is opt-in and bounded. */
+static void request_exit(const char *reason) {
+    if (!running) return;
+    g_exit_reason = reason ? reason : "unclassified";
+    char message[128];
+    snprintf(message, sizeof(message),
+             "exit requested: reason=%s screen=%s last_input=%s",
+             g_exit_reason, state_name(state), g_last_input_key);
+    log_msg(message);
+    running = 0;
 }
 
 /* ── Opt-in health monitor ──────────────────────────────────────────────────
@@ -2233,7 +2251,7 @@ static void launch_game(int sys_idx, int game_idx) {
     log_file_state("cmd file", CMD_PATH);
     play_launch();
     stop_audio();
-    running = 0;
+    request_exit("launch_game");
 }
 
 static void launch_entry(PlayEntry *entry) {
@@ -2260,7 +2278,7 @@ static void launch_entry(PlayEntry *entry) {
     log_file_state("cmd file", CMD_PATH);
     play_launch();
     stop_audio();
-    running = 0;
+    request_exit("launch_favorite_or_recent");
 }
 
 static void launch_app_cmd(const char *cmd) {
@@ -2277,7 +2295,7 @@ static void launch_app_cmd(const char *cmd) {
     log_file_state("cmd file", CMD_PATH);
     play_launch();
     stop_audio();
-    running = 0;
+    request_exit("launch_app");
 }
 
 /* Sleep and power-off must NOT write cmd_to_run.sh — that file persists across
@@ -2287,7 +2305,7 @@ static void exec_power_cmd(const char *cmd) {
     stop_audio();
     int rc = system(cmd);
     if (rc != 0) log_int("exec power cmd rc", rc);
-    running = 0;
+    request_exit("power_command");
 }
 
 static void run_settings_action(const char *cmd) {
@@ -2295,7 +2313,7 @@ static void run_settings_action(const char *cmd) {
     if (strcmp(cmd, "restart") == 0) {
         play_launch();
         stop_audio();
-        running = 0;
+        request_exit("settings_restart");
         return;
     }
     launch_app_cmd(cmd);
@@ -4701,14 +4719,15 @@ static void queue_test_center_entry(const TestCenterEntry *entry) {
     }
     render();
     SDL_Delay(700);
-    running = 0;
+    request_exit("test_center_queued");
 }
 
 static void on_test_center_key(SDLKey k) {
     if (k == BTN_UP && test_center_sel > 0) test_center_sel--;
     if (k == BTN_DOWN && test_center_sel < TEST_CENTER_COUNT - 1) test_center_sel++;
     if (k == BTN_A) queue_test_center_entry(&TEST_CENTER_ENTRIES[test_center_sel]);
-    if (k == BTN_B || k == BTN_LEFT || k == BTN_MENU) running = 0;
+    if (k == BTN_B || k == BTN_LEFT || k == BTN_MENU)
+        request_exit("test_center_cancelled");
 }
 
 static void app_initials(const char *label, char out[3]) {
@@ -5249,6 +5268,8 @@ static void draw_settings(void) {
 // ── Render ────────────────────────────────────────────────────────────────────
 
 static void render(void) {
+    struct timespec started, finished;
+    clock_gettime(CLOCK_MONOTONIC, &started);
     switch (state) {
     case STATE_HOME:
         draw_settings_hub_shell();
@@ -5297,8 +5318,10 @@ static void render(void) {
         break;
     }
     draw_screenshot_toast();
-    SDL_BlitSurface(screen, NULL, video, NULL);
-    SDL_Flip(video);
+    if (SDL_BlitSurface(screen, NULL, video, NULL) != 0)
+        log_sdl_error("SDL_BlitSurface");
+    if (SDL_Flip(video) != 0)
+        log_sdl_error("SDL_Flip");
     {
         static int screenshot_saved = 0;
         if (!screenshot_saved) {
@@ -5311,6 +5334,18 @@ static void render(void) {
                 screenshot_saved = 1;
             }
         }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &finished);
+    long render_ms = (finished.tv_sec - started.tv_sec) * 1000L
+                   + (finished.tv_nsec - started.tv_nsec) / 1000000L;
+    static time_t last_slow_render_log = 0;
+    time_t now = time(NULL);
+    if (render_ms >= 100 && now - last_slow_render_log >= 5) {
+        char message[96];
+        snprintf(message, sizeof(message), "slow render: screen=%s duration_ms=%ld",
+                 state_name(state), render_ms);
+        log_msg(message);
+        last_slow_render_log = now;
     }
 }
 
@@ -6172,6 +6207,7 @@ int main(int argc, char *argv[]) {
     srand((unsigned int)time(NULL));
     log_open();
     log_msg("pocketOS main start");
+    log_int("session pid", (int)getpid());
     LogTimer _t_startup = log_timer_begin("total startup");
     const char *autotest_env = getenv("POCKETOS_AUTOTEST_FRAMES");
     int autotest_frames = autotest_env ? atoi(autotest_env) : 0;
@@ -6361,6 +6397,7 @@ int main(int argc, char *argv[]) {
     }
 
     g_last_input = time(NULL);  /* start idle timer from launch, not epoch */
+    g_exit_reason = "main_loop_active";
     health_log_sample("launch");
 
     SDL_Event ev;
@@ -6376,7 +6413,10 @@ int main(int argc, char *argv[]) {
         }
 
         while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_QUIT) running = 0;
+            if (ev.type == SDL_QUIT) {
+                log_msg("SDL event: SDL_QUIT");
+                request_exit("sdl_quit");
+            }
             if (ev.type == SDL_KEYDOWN) {
                 g_dirty = 1;
                 g_last_input = time(NULL);
@@ -6385,6 +6425,8 @@ int main(int argc, char *argv[]) {
                     g_idle_dimmed = 0;
                 }
                 SDLKey k = ev.key.keysym.sym;
+                snprintf(g_last_input_key, sizeof(g_last_input_key), "%s",
+                         SDL_GetKeyName(k));
                 switch (state) {
                 case STATE_HOME:    on_home_key(k);    break;
                 case STATE_SYSTEMS: on_systems_key(k); break;
@@ -6470,12 +6512,15 @@ int main(int argc, char *argv[]) {
 #endif
 
         if (autotest_frames > 0 && ++frames >= autotest_frames) {
-            running = 0;
+            request_exit("autotest_complete");
         }
-        if (stress_end && time(NULL) >= stress_end) running = 0;
+        if (stress_end && time(NULL) >= stress_end)
+            request_exit("stress_test_complete");
     }
 
-    health_log_sample("exit");
+    char exit_event[80];
+    snprintf(exit_event, sizeof(exit_event), "exit_%s", g_exit_reason);
+    health_log_sample(exit_event);
     clear_text_cache();
     TTF_CloseFont(font_body);
     TTF_CloseFont(font_game);

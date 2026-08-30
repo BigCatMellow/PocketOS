@@ -19,12 +19,18 @@ MANAGED_BLOCK = """\
     # POCKETOS_INTEGRATION_BEGIN
     cd "$miyoodir/app"
     pocketos_fail_flag=${POCKETOS_FAIL_FLAG:-/tmp/pocketos_failed}
+    pocketos_runtime_log="$sysdir/logs/pocketos_runtime.log"
+    pocketos_log() {
+        mkdir -p "$sysdir/logs"
+        printf '%s PocketOS runtime: %s\\n' "$(date +%s)" "$*" >> "$pocketos_runtime_log"
+    }
     pocketos_stress_seconds=""
     if [ -f "$sysdir/pocketos_stress_test_seconds" ]; then
         pocketos_stress_seconds=$(cat "$sysdir/pocketos_stress_test_seconds" 2> /dev/null)
         rm -f "$sysdir/pocketos_stress_test_seconds"
     fi
     if [ -x "$sysdir/bin/pocketOS" ] && [ ! -e "$pocketos_fail_flag" ]; then
+        pocketos_log "launch requested stress_seconds=${pocketos_stress_seconds:-0}"
         if echo "$pocketos_stress_seconds" | grep -q '^[1-9][0-9]*$'; then
             # Onion's key monitor uses real button activity for its own sleep
             # timer.  The automated test has no physical presses, so keep the
@@ -36,18 +42,22 @@ MANAGED_BLOCK = """\
                 POCKETOS_STRESS_TEST=1 \\
                 POCKETOS_STRESS_TEST_SECONDS="$pocketos_stress_seconds" \\
                 "$sysdir/bin/pocketOS"
+            pocketos_status=$?
             rm -f /tmp/stay_awake
         else
             PATH="$miyoodir/app:$PATH" \\
                 LD_LIBRARY_PATH="$miyoodir/lib:/config/lib:/lib" \\
                 LD_PRELOAD="$miyoodir/lib/libpadsp.so" \\
                 "$sysdir/bin/pocketOS"
+            pocketos_status=$?
         fi
-        pocketos_status=$?
+        if [ -e /tmp/cmd_to_run.sh ]; then
+            pocketos_log "PocketOS exited with status $pocketos_status; command_handoff=present"
+        else
+            pocketos_log "PocketOS exited with status $pocketos_status; command_handoff=absent"
+        fi
         if [ "$pocketos_status" -ne 0 ]; then
-            mkdir -p "$sysdir/logs"
-            printf '%s\\n' "PocketOS failed with status $pocketos_status; using MainUI for this boot" \\
-                >> "$sysdir/logs/pocketos_runtime.log"
+            pocketos_log "PocketOS failed with status $pocketos_status; using MainUI for this boot"
             : > "$pocketos_fail_flag"
             PATH="$miyoodir/app:$PATH" \\
                 LD_LIBRARY_PATH="$miyoodir/lib:/config/lib:/lib" \\
@@ -55,6 +65,7 @@ MANAGED_BLOCK = """\
                 ./MainUI > /dev/null 2>&1
         fi
     else
+        pocketos_log "using MainUI: pocketOS unavailable or fail-open flag present"
         PATH="$miyoodir/app:$PATH" \\
             LD_LIBRARY_PATH="$miyoodir/lib:/config/lib:/lib" \\
             LD_PRELOAD="$miyoodir/lib/libpadsp.so" \\
