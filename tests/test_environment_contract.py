@@ -15,11 +15,17 @@ class EnvironmentContractTests(unittest.TestCase):
         self.assertEqual("pocketos-release", spec["environment_id"])
         self.assertEqual("1.2.8", spec["project"]["pocketos_version"])
         self.assertIn("@sha256:", spec["toolchain"]["miyoo_mini"])
-        for profile in ("ci-arm", "ci-zip", "host-render"):
+        for profile in ("ci-arm", "ci-zip", "distribution-paused", "host-render"):
             self.assertIn(profile, spec["profiles"])
 
-    def test_ci_zip_profile_matches_release_payload_contract(self):
-        report = check_environment(load_spec(ROOT / "pocketos" / "environment.json"), "ci-zip")
+    def test_distribution_environment_matches_active_state(self):
+        spec = load_spec(ROOT / "pocketos" / "environment.json")
+        profile = (
+            "distribution-paused"
+            if spec["project"].get("distribution_state") == "paused"
+            else "ci-zip"
+        )
+        report = check_environment(spec, profile)
         self.assertEqual([], report["failures"]["missing_paths"])
         self.assertEqual([], report["failures"]["source_mismatches"])
 
