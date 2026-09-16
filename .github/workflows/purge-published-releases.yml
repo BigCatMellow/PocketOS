@@ -1,0 +1,38 @@
+name: Purge published PocketOS releases
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/purge-published-releases.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  purge:
+    if: github.repository == 'BigCatMellow/PocketOS'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete exactly the ten published releases and preserve tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          releases="$(gh api --paginate "/repos/$GH_REPO/releases?per_page=100" --jq '.[].id')"
+          count="$(printf '%s\n' "$releases" | sed '/^$/d' | wc -l)"
+          if [ "$count" -ne 10 ]; then
+            echo "Expected exactly 10 published releases; found $count. Refusing to delete."
+            exit 1
+          fi
+          while IFS= read -r id; do
+            [ -n "$id" ] || continue
+            gh api --method DELETE "/repos/$GH_REPO/releases/$id"
+          done <<< "$releases"
+          remaining="$(gh api --paginate "/repos/$GH_REPO/releases?per_page=100" --jq '.[].id' | sed '/^$/d' | wc -l)"
+          if [ "$remaining" -ne 0 ]; then
+            echo "Release purge incomplete; $remaining release(s) remain."
+            exit 1
+          fi
+          echo "All published GitHub Releases removed; tags were not modified."
