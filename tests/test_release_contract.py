@@ -6,8 +6,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseContractTests(unittest.TestCase):
-    def test_release_builds_complete_onedir_installer(self):
+    def test_release_workflow_matches_active_distribution_state(self):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+
+        if "Release (distribution paused)" in workflow:
+            self.assertIn("PocketOS public release publishing is temporarily disabled.", workflow)
+            self.assertNotIn("softprops/action-gh-release", workflow)
+            self.assertNotIn("tags:\n      - 'v*'", workflow)
+            return
+
         self.assertIn("python3 tools/check_environment.py --profile ci-arm --json", workflow)
         self.assertIn("python3 tools/check_environment.py --profile ci-zip --json", workflow)
         self.assertIn(
