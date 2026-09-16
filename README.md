@@ -2,7 +2,7 @@
 
 > **PUBLIC DISTRIBUTION TEMPORARILY PAUSED**
 >
-> Do not download or install existing PocketOS release artifacts while the project reconciles the shipped release with the current reliability/safety work. The latest public release (`v1.2.8`) predates safety hardening now present on `main`. New release publishing is disabled until this is resolved.
+> PocketOS currently has **no published GitHub Releases or approved downloadable artifacts**. Previously published releases were removed after review found that the shipped package line lagged safety hardening already present on `main`. Historical Git tags remain for traceability. New public release publishing stays disabled until the [Release Confidence V1 roadmap](docs/roadmap-release-confidence-v1.md) is completed and a fresh candidate is explicitly approved.
 
 A focused game launcher for the [Miyoo Mini Plus](https://lomiyoo.com/), built on top of [Onion OS](https://github.com/OnionUI/Onion). The five-category interface keeps Most Played, Browse, Library, Favorites, and Settings one shoulder press apart while retaining Onion's emulators, apps, and runtime.
 
@@ -16,9 +16,15 @@ Requires Onion OS to be installed first.
 
 PocketOS installers, SD-card ZIPs, ROM Importer packages, Genre Scanner packages, and other release artifacts are **not currently approved for distribution**.
 
-The repository source remains available for inspection and development. Do not treat the existence of an older GitHub release or release asset as approval to install or redistribute it.
+The repository source remains available for inspection and development. Historical version tags are retained only for traceability and must not be treated as current release approval.
 
-Distribution may resume only after the release contents are reconciled with the current reliability work and the resulting release is re-verified.
+Distribution may resume only after the current source, safety evidence, device evidence, review provenance, package identity, and release gates are reconciled and a fresh release candidate is verified.
+
+See:
+
+- [Project assessment — 2026-09-16](docs/project-assessment-2026-09-16.md)
+- [Release Confidence V1 roadmap](docs/roadmap-release-confidence-v1.md)
+- [Historical v1.3 reliability roadmap](docs/roadmap-v1.3-reliability.md)
 
 ---
 
@@ -78,7 +84,7 @@ PocketOS includes 53 built-in color schemes. In **Settings → Appearance → Th
 
 PocketOS can write a small local health log—memory use, available memory, battery level, brightness, and screen state—to help diagnose long-session issues. It records no game names and sends nothing online. The repository also contains stress-test and launcher-comparison tooling used for development validation.
 
-These tools do not override the current distribution hold.
+These tools do not override the current distribution hold. Release-grade device claims require retained evidence under the Release Confidence V1 roadmap.
 
 ---
 
