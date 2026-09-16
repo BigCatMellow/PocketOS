@@ -4,7 +4,8 @@
   "project": {
     "name": "PocketOS",
     "pocketos_version": "1.2.8",
-    "onion_base": "v4.3.1-1"
+    "onion_base": "v4.3.1-1",
+    "distribution_state": "paused"
   },
   "toolchain": {
     "miyoo_mini": "aemiii91/miyoomini-toolchain@sha256:e5123590ad75d27f0f4c91196e3119a255cad45f3ae15243e29a8e0a2ec50132"
@@ -53,6 +54,23 @@
         {
           "path": ".github/workflows/release.yml",
           "text": "cp tools/onion_runtime.py staging/onion_runtime.py"
+        }
+      ]
+    },
+    "distribution-paused": {
+      "required_tools": ["python3"],
+      "required_paths": [
+        ".github/workflows/release.yml",
+        "README.md"
+      ],
+      "source_contains": [
+        {
+          "path": ".github/workflows/release.yml",
+          "text": "Release (distribution paused)"
+        },
+        {
+          "path": "README.md",
+          "text": "PUBLIC DISTRIBUTION TEMPORARILY PAUSED"
         }
       ]
     },
