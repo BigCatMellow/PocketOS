@@ -2,9 +2,9 @@
 
 Status: PLANNED / NOT ACTIVE IMPLEMENTATION
 
-Owner: PocketOS project
+Owner: AI orchestration operator, under human PocketOS project ownership
 
-Method: MAPS_L Project Bootstrap
+Method: MAPS_L Project Bootstrap + orchestration
 
 Primary target: Miyoo Mini Plus running Onion OS + PocketOS
 
@@ -23,6 +23,10 @@ This project is **not** an attempt to bring Gen1Recomp's voxel/3D showcase featu
 This roadmap records the future project; it does not activate implementation.
 
 PocketOS `Release Confidence V1` remains the active higher-priority roadmap. The Gen1Recomp project may be promoted by explicit human priority decision. Planning and bounded non-invasive feasibility research may be done without changing PocketOS runtime behavior.
+
+Once promoted, the AI orchestration operator owns execution through parent completion. It should not stop at child-task completion, a build, a commit, a PR, or a device-test request while other authorized work remains. It may research, create branches/worktrees, implement bounded changes, build packages, run host/CI verification, inspect returned device evidence, correct failures, and continue to the next eligible task without routine human approval.
+
+Human reauthorization remains required for material scope expansion, spending/credentials, destructive actions outside the approved disposable/test environment, merge/publication, or an irreducibly subjective choice.
 
 No public PocketOS release artifact may include this work until the release-confidence publication gates are satisfied.
 
@@ -88,6 +92,66 @@ Checked 2026-09-19.
 - Arbitrary desktop LÖVE compatibility.
 - Rewriting PocketOS in LÖVE.
 - Making LÖVE a dependency of normal PocketOS operation.
+
+## AI-agent execution model
+
+The AI orchestration operator owns the parent outcome. Delegated helpers may perform bounded research, implementation, build, verification, or independent-review jobs, but returned work is evidence to reconcile, not automatic completion.
+
+Default loop:
+
+```text
+recover live PocketOS + upstream + toolchain state
+→ select highest-value eligible roadmap task
+→ execute directly or dispatch bounded helper
+→ inspect build/test/device evidence
+→ reconcile findings into the roadmap/task state
+→ fix, research, reduce scope, or advance
+→ repeat until parent DONE or a true authority boundary
+```
+
+### Agent-owned work
+
+The AI agent should perform, without asking for routine continuation approval:
+
+- dependency and source research;
+- branch/worktree/task setup;
+- ARMv7 toolchain/build-system work;
+- runtime and package construction;
+- host-side tests and static verification;
+- PocketOS launch/integration changes after their gates open;
+- generation of device-test packages and logging/telemetry;
+- analysis of returned logs/results;
+- bounded corrective iterations;
+- documentation and reproducibility work;
+- independent-review dispatch and reconciliation where tooling permits.
+
+### Human/device boundary
+
+Real Miyoo evidence is required, but physical possession of the handheld does not transfer project ownership to the human.
+
+If an authorized remote shell/device route is available, the AI agent should use it and collect the evidence itself.
+
+If no such route is available, the AI agent must reduce the human step to a **bounded device fixture action**:
+
+1. produce one ready-to-copy test package;
+2. provide exact placement/launch instructions;
+3. make the package automatically record as much evidence as possible;
+4. request only observations that cannot be instrumented, such as whether sound is actually audible or a specific physical button behaves correctly;
+5. receive the resulting log/artifact/observation;
+6. analyze it and continue autonomously.
+
+The human should not be asked to diagnose compiler errors, choose libraries, edit code, interpret logs, or decide routine next steps.
+
+A hardware checkpoint is therefore an evidence-acquisition boundary, not a handoff of project responsibility or a default approval gate.
+
+### Agent stop conditions
+
+The agent stops driving only when:
+
+- **COMPLETE:** parent acceptance criteria, required device proof, and independent review pass;
+- **BLOCKED:** a specific unresolved dependency prevents any productive in-scope work;
+- **REAUTHORIZATION REQUIRED:** the necessary next action leaves the approved authority envelope;
+- **ACTIVE WAIT:** a named device/helper/test dependency has been dispatched and its result has not yet returned.
 
 ## Intended architecture
 
@@ -211,31 +275,65 @@ Goal: make the result independently reproducible.
 
 ## First execution wave after promotion
 
-Do not begin with PocketOS code changes.
+Do not begin with PocketOS code changes. These are AI-agent-owned tasks; a fresh agent should be able to execute them without the human deciding routine implementation details.
 
 ### Task A — ARMv7 LÖVE dependency matrix
 
-Output: one build matrix mapping each required LÖVE 11.5 dependency to Miyoo/Onion availability, bundled build, or unresolved gap.
+Owner: AI implementation/research agent.
 
-Stop condition: any mandatory dependency has no plausible ARMv7 path.
+Output: one build matrix mapping each required LÖVE 11.5 dependency to Miyoo/Onion availability, bundled build, or unresolved gap, plus a recommended minimal build graph.
 
-### Task B — minimal LÖVE hardware smoke test
+Evidence: exact upstream/toolchain revisions and source references.
 
-Output: runtime package + tiny program proving render/input/audio/write/exit on the device.
+Stop condition: any mandatory dependency has no plausible ARMv7 path after focused research.
 
-Evidence: build log, exact hashes/revisions, device log, FPS and memory sample.
+### Task B — reproducible ARMv7 LÖVE build
 
-Stop condition: repeated instability or performance failure that cannot be isolated.
+Owner: AI implementation agent.
 
-### Task C — Gen1Recomp no-mod smoke test
+Dependency: Task A.
 
-Output: Red imports and reaches playable gameplay on hardware.
+Output: scripts/configuration that build the smallest viable LÖVE 11.5 runtime and package its required shared libraries for the Miyoo.
 
-Evidence: launch log, input/audio/save/load checks, performance sample.
+Verification: host-side ELF/architecture/dependency/glibc checks and a retained build log.
 
-Dependency: A + B pass.
+Stop condition: a reproducible build cannot be produced without crossing the approved scope or replacing the intended runtime architecture.
 
-Only after Task C passes should mod compatibility or PocketOS integration become eligible.
+### Task C — instrumented minimal LÖVE device smoke test
+
+Owner: AI orchestration agent. Human participates only if physical-device interaction cannot be automated.
+
+Dependency: Task B.
+
+Output: ready-to-copy test package that automatically records startup, rendering heartbeat/FPS, memory, filesystem-write result, detected controls/events, audio initialization, and clean-exit status.
+
+Human-only evidence, if unavoidable: confirm visible rendering, audible sound, and requested physical-button actions.
+
+The AI agent consumes the resulting evidence, diagnoses failures, rebuilds, and repeats without asking which technical step to try next.
+
+Stop condition: repeated runtime instability/performance failure remains after bounded diagnosis and correction.
+
+### Task D — Gen1Recomp no-mod smoke test
+
+Owner: AI implementation/orchestration agent.
+
+Dependency: Task C passes.
+
+Output: a ready-to-copy Gen1Recomp package that imports/boots Red using the verified runtime and LOW-performance path.
+
+Evidence: launch/runtime log, import result, detected input events, FPS/memory sample, save/load evidence, and the minimal unavoidable human observations for display/audio/buttons.
+
+The AI agent reconciles failures and continues corrections until the gate passes or a true blocker is established.
+
+### Task E — representative mod compatibility
+
+Owner: AI implementation/orchestration agent.
+
+Dependency: Task D passes.
+
+Output: three pinned representative mods—QoL/UI/tool, data/balance, gameplay/content—validated through the production mod loader plus a handheld-usable enable/disable route.
+
+Only after Task D passes should Task E or PocketOS integration become eligible. PocketOS integration itself remains later because proving the standalone runtime/game is the highest-value uncertainty first.
 
 ## Risks and challenge
 
