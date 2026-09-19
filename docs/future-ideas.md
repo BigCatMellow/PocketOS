@@ -4,72 +4,36 @@ Status: PARKED IDEAS / NOT ACTIVE SCOPE
 
 Purpose: preserve promising future directions without letting them compete with the active `Release Confidence V1` stabilization work.
 
-## LÖVE / Love2D runtime support
+## Gen1Recomp / LÖVE runtime support
 
-Status: PARKED EXPERIMENT
+Status: PLANNED / NOT ACTIVE IMPLEMENTATION
 
-### Idea
+The concrete owner for this idea is now:
 
-Explore whether PocketOS can run existing programs and games built with **LÖVE (Love2D)** on the Miyoo Mini Plus.
+- [Gen1Recomp on Miyoo Mini Plus roadmap](roadmap-gen1recomp-miyoo.md)
 
-The intended architecture is **not** to rewrite PocketOS in LÖVE. PocketOS would remain a native lightweight launcher and optionally launch `.love` packages through a Miyoo-compatible LÖVE runtime.
+The target is deliberately narrower than generic LÖVE compatibility: run the normal 2D Gen1Recomp experience on the Miyoo Mini Plus with its upstream mod framework available for lightweight QoL/content/balance/UI mods.
 
-Conceptual flow:
+The intended architecture remains additive:
 
 ```text
 PocketOS library entry
-→ PocketOS LÖVE launcher wrapper
-→ Miyoo-compatible LÖVE runtime
-→ SDL2 / GLES / audio stack
-→ existing .love game or program
+→ Miyoo Gen1Recomp launch wrapper
+→ ARMv7 LÖVE 11.5 runtime
+→ Miyoo SDL2 / EGL/GLES2 / audio stack
+→ upstream Gen1Recomp game.love
 ```
 
-Possible library layout:
-
-```text
-Roms/LOVE/
-├── Game1.love
-├── Game2.love
-└── SomeProgram/
-    ├── main.lua
-    ├── conf.lua
-    └── assets/
-```
-
-### Why it may be feasible
-
-- LÖVE projects are primarily Lua content executed by a runtime, so individual programs would not necessarily require recompilation.
-- Existing Miyoo Mini Plus community work provides SDL2/GLES-capable foundations that may make an ARM LÖVE port practical.
-- PocketOS already has a native launch boundary that could potentially treat LÖVE as another runtime/system rather than embedding it into the core launcher.
-
-### Main unknowns
-
-- whether LÖVE 11.x can be compiled and run reliably on the Miyoo Mini Plus environment;
-- graphics performance, especially where GLES is software-rendered;
-- memory overhead on the Miyoo Mini Plus;
-- audio-library compatibility;
-- Miyoo control mapping and keyboard/mouse assumptions in existing LÖVE projects;
-- save/config paths and clean return to PocketOS/Onion;
-- compatibility limits for shaders, canvases, particles, large asset sets, and high draw-call workloads.
-
-### First proof of concept
-
-When this idea is promoted, keep the first experiment deliberately small:
-
-1. build a Miyoo-compatible LÖVE 11.x runtime;
-2. launch a minimal `main.lua` on real hardware;
-3. verify D-pad/buttons, sprite rendering, text, sound, music, save/load, exit/return, FPS, and memory use;
-4. progressively test sprites, scaling, audio, many sprites, canvases, particles, then shaders;
-5. try one small existing `.love` game without modifying PocketOS core behavior;
-6. only if runtime/device results are acceptable, prototype PocketOS library discovery and launching for `.love` files.
+PocketOS remains a native lightweight launcher. LÖVE must remain an optional runtime rather than a dependency of normal PocketOS operation.
 
 ### Boundaries
 
-- Do **not** rewrite the PocketOS launcher in LÖVE as part of this idea.
+- Do **not** rewrite the PocketOS launcher in LÖVE.
 - Do **not** make LÖVE a dependency of normal PocketOS operation.
-- Treat it as an optional runtime.
-- Do **not** promote this into active implementation while `docs/roadmap-release-confidence-v1.md` remains the higher-priority stabilization work unless the human project owner explicitly changes priority.
+- Do **not** make voxel/3D rendering, heavy shaders, online play, Gen 2, or arbitrary desktop LÖVE compatibility part of the first target.
+- Prove the LÖVE runtime and Gen1Recomp directly on real Miyoo hardware before changing PocketOS integration.
+- Do **not** promote implementation ahead of `docs/roadmap-release-confidence-v1.md` without an explicit human project-priority decision.
 
 ### Promotion condition
 
-This idea becomes active only after an explicit project-priority decision and a bounded PoC task. Until then it is preserved for future investigation only.
+Implementation becomes active only after an explicit project-priority decision. The roadmap's first execution wave begins with ARMv7 LÖVE feasibility and a minimal real-device smoke test, not PocketOS core changes.
